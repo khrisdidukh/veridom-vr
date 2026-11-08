@@ -157,7 +157,7 @@ export class Environment {
   }
 
   /** Fits the sun's shadow box to what is being looked at. */
-  focus(center: THREE.Vector3, radius: number) {
+  focus(center: THREE.Vector3, radius: number, orientation?: THREE.Quaternion) {
     const dir = this.sun.position.clone().normalize();
     this.sun.target.position.copy(center);
     this.sun.position.copy(center).addScaledVector(dir, radius * 3);
@@ -168,7 +168,9 @@ export class Environment {
     cam.far = radius * 6;
     cam.updateProjectionMatrix();
     this.snow.position.copy(center);
-    this.snow.scale.setScalar(Math.max(0.02, radius / 14));
+    // Snow space = house plan space (scaled), so flakes can skip the inside of the house.
+    this.snow.scale.setScalar(Math.max(0.02, radius / 16));
+    if (orientation) this.snow.quaternion.copy(orientation);
   }
 
   /** Snow fall; call every frame. */
@@ -179,6 +181,8 @@ export class Environment {
     for (let i = 0; i < a.count; i++) {
       let y = a.getY(i) - dt * 0.9;
       if (y < 0) y += 14;
+      // Under the roof line of the 12.4 × 9.4 m house no snow falls.
+      if (y < 2.85 && Math.abs(a.getX(i)) < 6.3 && Math.abs(a.getZ(i)) < 4.8) y = 14;
       a.setY(i, y);
       a.setX(i, a.getX(i) + Math.sin(t + i) * dt * 0.08);
     }

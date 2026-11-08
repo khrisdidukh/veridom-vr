@@ -233,7 +233,7 @@ function placeWorld() {
   pivot.updateMatrixWorld(true);
   // Shadow box around what you look at; lamps scaled with the world (light falls off with distance²).
   const centre = inner.localToWorld(HOUSE_CENTER.clone());
-  env.focus(centre, 16 * worldScale);
+  env.focus(centre, 16 * worldScale, pivot.quaternion);
   for (const l of env.lamps) l.intensity = 9 * env.darkness * worldScale * worldScale;
   if (!xr) {
     if (s.mode === "walk") {
