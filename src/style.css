@@ -27,3 +27,7 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #b9d3e6; }
   .intro p { display: none; }
 }
 #enter .note a { color: #7fe3ef; }
+@media (max-height: 700px) {
+  .panel { width: min(380px, calc(100vw - 32px)); }
+  .intro p:not(.note) { display: none; }
+}

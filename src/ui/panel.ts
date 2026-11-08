@@ -1,6 +1,9 @@
 import { changeRequestText } from "../edit/changes";
 import { STAGES } from "../edit/stages";
 import { labelFor, type Store } from "../state";
+import { CATALOG } from "../furnish/catalog";
+import { MONTHS, compass } from "../env/sun";
+import type { Weather } from "../env/environment";
 
 // One control panel drawn on a canvas. In the headset it is a texture on a
 // floating plane; on a desktop the same canvas sits in the page. Hits arrive
@@ -20,6 +23,8 @@ type Button = {
   tone?: "default" | "primary" | "danger";
   disabled?: boolean;
 };
+
+type Slider = { x: number; y: number; w: number; h: number; set: (f: number) => void; done?: () => void };
 
 const C = {
   bg: "#13161b",
@@ -42,11 +47,15 @@ export class Panel {
   private ctx: CanvasRenderingContext2D;
   private buttons: Button[] = [];
   private slider = { x: 40, y: 150, w: W - 80, h: 70 };
+  private sliders: Slider[] = [];
+  private active: Slider | null = null;
+  /** Filled in by the scene: sun height and direction for the light card. */
+  sunInfo = { elevation: 0, azimuth: 0 };
   dragging = false;
   onRedraw: () => void = () => {};
   onExport: (text: string) => void = () => {};
 
-  constructor(private store: Store, private hooks: { enterRoom: (id: string) => void; turn: (deg: number) => void; rotateModel: (deg: number) => void }) {
+  constructor(private store: Store, private hooks: { enterRoom: (id: string) => void; turn: (deg: number) => void; rotateModel: (deg: number) => void; addFurniture: (catalogId: string) => void }) {
     this.canvas = document.createElement("canvas");
     this.canvas.width = W;
     this.canvas.height = H;
@@ -63,8 +72,9 @@ export class Panel {
   press(u: number, v: number): boolean {
     const x = u * W;
     const y = v * H;
-    const s = this.slider;
-    if (x >= s.x - 10 && x <= s.x + s.w + 10 && y >= s.y && y <= s.y + s.h) {
+    const sl = this.sliders.find((s) => x >= s.x - 10 && x <= s.x + s.w + 10 && y >= s.y && y <= s.y + s.h);
+    if (sl) {
+      this.active = sl;
       this.dragging = true;
       this.dragTo(u);
       return true;
@@ -78,16 +88,16 @@ export class Panel {
   }
 
   dragTo(u: number) {
-    if (!this.dragging) return;
-    const t = ((u * W - this.slider.x) / this.slider.w) * 5;
-    this.store.setTimeline(t);
+    if (!this.dragging || !this.active) return;
+    const a = this.active;
+    a.set(Math.max(0, Math.min(1, (u * W - a.x) / a.w)));
   }
 
   release() {
     if (!this.dragging) return;
     this.dragging = false;
-    // Snap to the nearest stage so the panel shows a clean stage name.
-    this.store.setTimeline(Math.round(this.store.s.timeline * 4) / 4);
+    this.active?.done?.();
+    this.active = null;
   }
 
   private btn(b: Button) {
@@ -123,13 +133,25 @@ export class Panel {
     ctx.textBaseline = "alphabetic";
     ctx.fillStyle = C.text;
     ctx.font = "700 38px system-ui, sans-serif";
-    ctx.fillText("Veridom · Before you build", 40, 64);
+    ctx.fillText("Veridom · Before you build", 40, 64, 500);
     ctx.fillStyle = C.dim;
     ctx.font = "26px system-ui, sans-serif";
     ctx.fillText(s.house.name, 40, 100);
-    this.btn({ x: 660, y: 34, w: 160, h: 64, label: "Model", active: s.mode === "model", onPress: () => store.set({ mode: "model" }) });
-    this.btn({ x: 832, y: 34, w: 160, h: 64, label: "Walk in", active: s.mode === "walk", onPress: () => store.set({ mode: "walk" }) });
-    this.btn({ x: 1004, y: 34, w: 156, h: 64, label: "X-ray", active: s.xray, onPress: () => store.set({ xray: !s.xray }) });
+    this.sliders = [];
+    const hb = [
+      { label: "Model", active: s.mode === "model", onPress: () => store.set({ mode: "model" }) },
+      { label: "Walk in", active: s.mode === "walk", onPress: () => store.set({ mode: "walk" }) },
+      { label: "X-ray", active: s.xray, onPress: () => store.set({ xray: !s.xray }) },
+      { label: "Light", active: s.view === "light", onPress: () => store.set({ view: s.view === "light" ? "main" : "light" }) },
+      { label: "Furnish", active: s.view === "furnish", onPress: () => this.openFurnish() },
+    ];
+    hb.forEach((b, i) => this.btn({ x: 560 + i * 122, y: 34, w: 114, h: 64, ...b }));
+    this.sliders.push({
+      ...this.slider,
+      set: (f) => store.setTimeline(f * 5),
+      // Snap to quarter stages so the panel shows a clean stage name.
+      done: () => store.setTimeline(Math.round(store.s.timeline * 4) / 4),
+    });
 
     // Timeline.
     const sl = this.slider;
@@ -181,6 +203,9 @@ export class Panel {
     roundRect(ctx, 40, y, W - 80, 340, 20);
     ctx.fill();
     if (s.view === "changes") this.drawChanges(y);
+    else if (s.view === "light") this.drawLight(y);
+    else if (s.view === "furnish" && s.selected?.type !== "furniture") this.drawCatalog(y);
+    else if (s.selected?.type === "furniture") this.drawFurniture(y);
     else this.drawSelection(y);
 
     // Footer: findings and changes.
@@ -266,6 +291,107 @@ export class Panel {
     ctx.fillStyle = C.dim;
     wrap(ctx, c.impact.summary, 70, y + 252, W - 160, 34);
     if (c.impact.rework.length) wrap(ctx, "Rework: " + c.impact.rework.join(" · "), 70, y + 292, W - 160, 34);
+  }
+
+  private openFurnish() {
+    const { store } = this;
+    if (store.s.view === "furnish") {
+      store.set({ view: "main", selected: null });
+      return;
+    }
+    // Furniture lives in the finished house.
+    store.setTimeline(5);
+    store.set({ view: "furnish", selected: null, xray: false, message: "Pinch a piece to add it, then pinch and drag it into place." });
+  }
+
+  private drawCatalog(y: number) {
+    const { ctx } = this;
+    ctx.fillStyle = C.text;
+    ctx.font = "600 30px system-ui, sans-serif";
+    ctx.fillText("Add furniture", 70, y + 52);
+    ctx.fillStyle = C.dim;
+    ctx.font = "24px system-ui, sans-serif";
+    ctx.fillText("It appears in front of you. Pinch it and drag to move.", 300, y + 52, W - 380);
+    const cols = 4;
+    const bw = (W - 140 - (cols - 1) * 12) / cols;
+    CATALOG.forEach((c, i) => {
+      const col = i % cols;
+      const row = Math.floor(i / cols);
+      this.btn({ x: 70 + col * (bw + 12), y: y + 78 + row * 82, w: bw, h: 70, label: c.label, tone: "primary", onPress: () => this.hooks.addFurniture(c.id) });
+    });
+  }
+
+  private drawFurniture(y: number) {
+    const { ctx, store } = this;
+    const s = store.s;
+    const t = s.selected!;
+    ctx.fillStyle = C.text;
+    ctx.font = "700 32px system-ui, sans-serif";
+    ctx.fillText(labelFor(s.house, t), 70, y + 54, 640);
+    this.btn({ x: 1010, y: y + 22, w: 120, h: 50, label: "Close", onPress: () => store.select(null) });
+    this.btn({ x: 70, y: y + 84, w: 230, h: 66, label: "⟲ Turn 45°", tone: "primary", onPress: () => store.rotateFurniture(t.id, 45) });
+    this.btn({ x: 312, y: y + 84, w: 230, h: 66, label: "Turn 45° ⟳", tone: "primary", onPress: () => store.rotateFurniture(t.id, -45) });
+    this.btn({ x: 554, y: y + 84, w: 200, h: 66, label: "Remove", tone: "danger", onPress: () => store.removeFurniture(t.id) });
+    this.btn({ x: 766, y: y + 84, w: 364, h: 66, label: "+ Add more", onPress: () => store.set({ selected: null, view: "furnish" }) });
+    ctx.fillStyle = C.dim;
+    ctx.font = "26px system-ui, sans-serif";
+    const blocked = s.findings.find((f) => f.elementIds.includes(t.id));
+    if (blocked) {
+      ctx.fillStyle = C.warn;
+      wrap(ctx, `⚠ ${blocked.title}. ${blocked.detail}`, 70, y + 200, W - 160, 34);
+    } else wrap(ctx, "Pinch it and drag along the floor to move it. Doors that would hit it light up in orange.", 70, y + 200, W - 160, 34);
+  }
+
+  private drawLight(y: number) {
+    const { ctx, store } = this;
+    const L = store.s.light;
+    ctx.fillStyle = C.text;
+    ctx.font = "600 30px system-ui, sans-serif";
+    const hh = Math.floor(L.hour);
+    const mm = Math.round((L.hour - hh) * 60 / 15) * 15;
+    const time = `${String(hh).padStart(2, "0")}:${String(mm % 60).padStart(2, "0")}`;
+    ctx.fillText(`Light at ${time}`, 70, y + 50);
+    ctx.fillStyle = C.dim;
+    ctx.font = "24px system-ui, sans-serif";
+    const el = this.sunInfo.elevation;
+    const sunText = el > 0 ? `Sun ${Math.round(el)}° high, from the ${compass(this.sunInfo.azimuth)}` : "The sun is down";
+    ctx.fillText(`${sunText} · Franzen, Waldviertel`, 330, y + 50, W - 400);
+    // Hour slider 5:00–22:00.
+    const sl = { x: 90, y: y + 70, w: W - 180, h: 64 };
+    const H0 = 5, H1 = 22;
+    const f = (L.hour - H0) / (H1 - H0);
+    ctx.fillStyle = C.line;
+    roundRect(ctx, sl.x, sl.y + 24, sl.w, 16, 8);
+    ctx.fill();
+    const grad = ctx.createLinearGradient(sl.x, 0, sl.x + sl.w, 0);
+    grad.addColorStop(0, "#3a4a7a");
+    grad.addColorStop(0.2, "#f2b36b");
+    grad.addColorStop(0.5, "#fff1c4");
+    grad.addColorStop(0.8, "#f2a35b");
+    grad.addColorStop(1, "#3a4a7a");
+    ctx.fillStyle = grad;
+    roundRect(ctx, sl.x, sl.y + 24, sl.w, 16, 8);
+    ctx.fill();
+    ctx.fillStyle = "#fff";
+    ctx.beginPath();
+    ctx.arc(sl.x + sl.w * f, sl.y + 32, 22, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = C.dim;
+    ctx.font = "22px system-ui, sans-serif";
+    for (const hTick of [6, 9, 12, 15, 18, 21]) {
+      ctx.textAlign = "center";
+      ctx.fillText(`${hTick}:00`, sl.x + (sl.w * (hTick - H0)) / (H1 - H0), sl.y + 80);
+    }
+    ctx.textAlign = "left";
+    this.sliders.push({ ...sl, set: (v) => store.setLight({ hour: H0 + v * (H1 - H0) }), done: () => store.setLight({ hour: Math.round(store.s.light.hour * 4) / 4 }) });
+    // Month and weather.
+    const by = y + 168;
+    MONTHS.forEach((m, i) => this.btn({ x: 70 + i * 132, y: by, w: 124, h: 60, label: m.label.slice(0, 3), active: L.month === m.id, onPress: () => store.setLight({ month: m.id }) }));
+    const weathers: [Weather, string][] = [["clear", "Sunny"], ["cloudy", "Clouds"], ["overcast", "Grey"], ["fog", "Fog"], ["snow", "Snow"]];
+    weathers.forEach(([w, label], i) => this.btn({ x: 620 + i * 104, y: by, w: 96, h: 60, label, active: L.weather === w, onPress: () => store.setLight({ weather: w }) }));
+    ctx.fillStyle = C.dim;
+    ctx.font = "22px system-ui, sans-serif";
+    ctx.fillText("Weather you get in the Waldviertel: sun, cloud, grey days, autumn fog, winter snow.", 70, by + 100, W - 140);
   }
 
   private drawChanges(y: number) {

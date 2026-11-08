@@ -79,3 +79,31 @@ describe("edits", () => {
     expect(text).toContain("Re-fit the kitchen base units");
   });
 });
+
+describe("furniture", () => {
+  it("demo furniture blocks no door", () => {
+    expect(runChecks(DEMO_HOUSE).some((f) => f.id.includes("-fu-"))).toBe(false);
+  });
+
+  it("a wardrobe in front of the bedroom door is flagged", () => {
+    const h = structuredClone(DEMO_HOUSE);
+    h.furniture.push({ id: "fu-test", catalogId: "wardrobe", x: 7.6, z: 3.9, rot: 90 });
+    expect(runChecks(h).map((f) => f.id)).toContain("swing-d-bed-fu-test");
+  });
+});
+
+import { FRANZEN, sunPosition } from "../src/env/sun";
+describe("sun over Franzen", () => {
+  it("stands high in the south at summer noon and low in winter", () => {
+    const jun = sunPosition(FRANZEN.lat, FRANZEN.lon, 172, 13.2, 2);
+    const dec = sunPosition(FRANZEN.lat, FRANZEN.lon, 355, 12.0, 1);
+    expect(jun.elevation).toBeGreaterThan(63);
+    expect(jun.elevation).toBeLessThan(66);
+    expect(dec.elevation).toBeGreaterThan(17);
+    expect(dec.elevation).toBeLessThan(19);
+    expect(Math.abs(jun.azimuth - 180)).toBeLessThan(10);
+  });
+  it("is below the horizon at midnight", () => {
+    expect(sunPosition(FRANZEN.lat, FRANZEN.lon, 172, 0, 2).elevation).toBeLessThan(0);
+  });
+});

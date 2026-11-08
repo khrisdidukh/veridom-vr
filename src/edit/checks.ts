@@ -1,3 +1,4 @@
+import { catalogById, footprint } from "../furnish/catalog";
 import { alongWall, wallById, wallFrame, type House, type Opening, type Vec2 } from "../house/model";
 
 // Plan checks you can see with your own eyes in the headset. Each finding
@@ -56,6 +57,18 @@ export function runChecks(h: House): Finding[] {
           title: `${d.label} hits the ${f.label.toLowerCase()}`,
           detail: "The door leaf sweeps over it. Flip the swing, move the hinge, or move the fixture.",
           elementIds: [d.id, f.id],
+        });
+      }
+    }
+    for (const it of h.furniture ?? []) {
+      const fp = footprint(it);
+      if (rectHitsSwing(swing, fp.min, fp.max)) {
+        const label = catalogById(it.catalogId)?.label.toLowerCase() ?? "furniture";
+        out.push({
+          id: `swing-${d.id}-${it.id}`,
+          title: `${d.label} hits the ${label}`,
+          detail: "The door can't open fully. Move the furniture or change the door.",
+          elementIds: [d.id, it.id],
         });
       }
     }

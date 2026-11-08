@@ -2,7 +2,11 @@ import { applyEdit, type Change } from "./edit/changes";
 import { runChecks, type Finding } from "./edit/checks";
 import type { ChangeKind, Target } from "./edit/impact";
 import { DEMO_HOUSE } from "./house/demo";
-import { cloneHouse, type House } from "./house/model";
+import { cloneHouse, type FurnitureItem, type House } from "./house/model";
+import { catalogById } from "./furnish/catalog";
+import type { LightSettings } from "./env/environment";
+
+export type Selection = Target | { type: "furniture"; id: string };
 
 export type Mode = "model" | "walk";
 
@@ -12,11 +16,12 @@ export type AppState = {
   timeline: number;
   mode: Mode;
   xray: boolean;
-  selected: Target | null;
+  selected: Selection | null;
   changes: Change[];
   findings: Finding[];
   roomId: string;
-  view: "main" | "changes";
+  view: "main" | "changes" | "light" | "furnish";
+  light: LightSettings;
   message: string;
   modelYaw: number;
 };
@@ -42,6 +47,7 @@ export class Store {
       findings: runChecks(house),
       roomId: "living",
       view: "main",
+      light: { hour: 15, month: "sep", weather: "clear" },
       message: "Pinch the timeline to build the house. Pinch a door, window or socket to change it.",
       modelYaw: 0,
     };
@@ -65,16 +71,52 @@ export class Store {
     this.emit(false);
   }
 
-  select(t: Target | null) {
+  select(t: Selection | null) {
     this.s.selected = t;
-    this.s.view = "main";
+    if (!(t?.type === "furniture" && this.s.view === "furnish")) this.s.view = t?.type === "furniture" ? "furnish" : "main";
     this.s.message = t ? "" : this.s.message;
+    this.emit(false);
+  }
+
+  setLight(patch: Partial<LightSettings>) {
+    this.s.light = { ...this.s.light, ...patch };
+    this.emit(false);
+  }
+
+  // Furniture changes are not construction changes: they don't go to the
+  // architect's list, but they re-run the checks (a wardrobe can block a door).
+  addFurniture(catalogId: string, x: number, z: number, rot: number) {
+    const item: FurnitureItem = { id: `fu-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 5)}`, catalogId, x, z, rot };
+    this.s.house = { ...this.s.house, furniture: [...this.s.house.furniture, item] };
+    this.s.selected = { type: "furniture", id: item.id };
+    this.s.message = `${catalogById(catalogId)?.label ?? "Piece"} added. Pinch and drag it to move it.`;
+    this.furnitureChanged();
+  }
+
+  moveFurniture(id: string, x: number, z: number) {
+    this.s.house = { ...this.s.house, furniture: this.s.house.furniture.map((f) => (f.id === id ? { ...f, x, z } : f)) };
+    this.furnitureChanged();
+  }
+
+  rotateFurniture(id: string, deg: number) {
+    this.s.house = { ...this.s.house, furniture: this.s.house.furniture.map((f) => (f.id === id ? { ...f, rot: (f.rot + deg) % 360 } : f)) };
+    this.furnitureChanged();
+  }
+
+  removeFurniture(id: string) {
+    this.s.house = { ...this.s.house, furniture: this.s.house.furniture.filter((f) => f.id !== id) };
+    if (this.s.selected?.id === id) this.s.selected = null;
+    this.furnitureChanged();
+  }
+
+  private furnitureChanged() {
+    this.s.findings = runChecks(this.s.house);
     this.emit(false);
   }
 
   edit(kind: ChangeKind, amount = 0) {
     const t = this.s.selected;
-    if (!t) return;
+    if (!t || t.type === "furniture") return;
     const r = applyEdit(this.s.house, t, kind, amount, this.s.timeline);
     if ("error" in r) {
       this.s.message = r.error;
@@ -93,9 +135,10 @@ export class Store {
   undo() {
     const prev = this.s.history.pop();
     if (!prev) return;
-    this.s.house = prev;
+    // Undo covers construction changes only; furniture stays where it is.
+    this.s.house = { ...prev, furniture: this.s.house.furniture };
     this.s.changes.pop();
-    this.s.findings = runChecks(prev);
+    this.s.findings = runChecks(this.s.house);
     this.s.message = "Last change undone.";
     this.persist();
     this.emit(true);
@@ -103,7 +146,7 @@ export class Store {
 
   get lastChange(): Change | null {
     const t = this.s.selected;
-    if (!t) return null;
+    if (!t || t.type === "furniture") return null;
     for (let i = this.s.changes.length - 1; i >= 0; i--) {
       const c = this.s.changes[i]!;
       if (c.target.id === t.id) return c;
@@ -120,7 +163,11 @@ export class Store {
   }
 }
 
-export function labelFor(h: House, t: Target): string {
+export function labelFor(h: House, t: Selection): string {
+  if (t.type === "furniture") {
+    const it = h.furniture.find((f) => f.id === t.id);
+    return (it && catalogById(it.catalogId)?.label) ?? "Furniture";
+  }
   if (t.type === "door" || t.type === "window") return h.openings.find((o) => o.id === t.id)?.label ?? t.id;
   if (t.type === "socket" || t.type === "switch") return h.points.find((p) => p.id === t.id)?.label ?? t.id;
   return h.fixtures.find((f) => f.id === t.id)?.label ?? t.id;

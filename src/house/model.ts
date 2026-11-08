@@ -72,6 +72,9 @@ export type Pipe = {
   points: { x: number; y: number; z: number }[];
 };
 
+/** A movable piece of furniture. rot is in degrees; at 0 its front faces plan south (−z), at 90 east. */
+export type FurnitureItem = { id: string; catalogId: string; x: number; z: number; rot: number };
+
 export type House = {
   name: string;
   plot: { min: Vec2; max: Vec2 };
@@ -83,6 +86,7 @@ export type House = {
   openings: Opening[];
   points: WallPoint[];
   fixtures: Fixture[];
+  furniture: FurnitureItem[];
   rooms: Room[];
   pipes: Pipe[];
   /** Distribution board; cables run from here to every point. */
