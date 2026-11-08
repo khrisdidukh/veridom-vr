@@ -118,10 +118,10 @@ export class Environment {
     this.sun.castShadow = look.sun > 0.3;
     this.sun.position.copy(dir).multiplyScalar(40);
     // Warm bounce light softens the blue cast the sky gives interiors.
-    this.hemi.intensity = (0.05 + 1.2 * day) * look.ambient;
+    this.hemi.intensity = (0.05 + 1.6 * day) * look.ambient;
     this.hemi.color.setRGB(1, 0.95, 0.88);
     this.hemi.groundColor.setRGB(0.55, 0.45, 0.36);
-    this.scene.environmentIntensity = (0.04 + 0.14 * day) * look.ambient;
+    this.scene.environmentIntensity = (0.04 + 0.1 * day) * look.ambient;
 
     if (look.cover >= 0.99 && this.lastCover < 0) {
       this.paintClouds(1);

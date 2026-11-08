@@ -1,7 +1,7 @@
 import * as THREE from "three";
 import { doorSwing } from "../edit/checks";
 import { buildCeilingLamp, buildCounter, buildShower, buildSink, buildWc, finishPiece, procUV } from "../furnish/pieces";
-import { M, solid, worldUV } from "./materials";
+import { M, M as Mat, solid, worldUV } from "./materials";
 import { mergeByMaterial } from "./merge";
 import { alongWall, wallById, wallFrame, wallLength, type Fixture, type House, type Opening, type Wall } from "./model";
 
@@ -329,6 +329,8 @@ function buildFixture(h: House, f: Fixture): THREE.Object3D {
 
 function addOpeningFinish(h: House, o: Opening, shell: THREE.Group, finish: THREE.Group, byElement: Map<string, THREE.Mesh[]>, ghost: THREE.Group) {
   const w = wallById(h, o.wallId);
+  // Own materials per opening, so highlighting one door doesn't tint every frame in the house.
+  const M = { white: Mat.white.clone(), anthracite: Mat.anthracite.clone(), chrome: Mat.chrome.clone(), glass: Mat.glass.clone() };
   const frame = (a: number, b: number, y0: number, y1: number, mat: THREE.Material, thick: number, across = 0) => {
     const m = wallPiece(w, a, b, y0, y1, mat, thick, across);
     if (m) {
