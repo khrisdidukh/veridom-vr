@@ -290,6 +290,8 @@ function applyState() {
   for (const meshes of built.byElement.values()) for (const m of meshes) setEmissive(m, null);
   for (const p of placed.values()) for (const m of p.meshes()) setEmissive(m, null);
   for (const f of s.findings) for (const id of f.elementIds) for (const m of meshesFor(id)) setEmissive(m, COLORS.highlight);
+  // Before/after: what the owner changed is violet, in either version.
+  if (s.comparing || s.view === "changes") for (const d of store.diff) for (const m of meshesFor(d.id)) setEmissive(m, COLORS.changed);
   if (s.selected) for (const m of meshesFor(s.selected.id)) setEmissive(m, COLORS.select);
 
   // Inside under a ceiling the eye adapts: the room is shown brighter than the plot outside.
@@ -1278,7 +1280,7 @@ function floorHit(ray: THREE.Ray): THREE.Vector2 | null {
 function startDrag(id: string, ray: THREE.Ray) {
   const item = store.s.house.furniture.find((f) => f.id === id);
   const at = floorHit(ray);
-  if (!item || !at) return;
+  if (!item || !at || store.s.comparing) return;
   dragging = { id, grab: new THREE.Vector2(item.x - at.x, item.z - at.y), lastCommit: 0, x: item.x, z: item.z };
 }
 

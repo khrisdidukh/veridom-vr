@@ -45,6 +45,7 @@ export const COLORS = {
   cable: 0xf2c230,
   highlight: 0xff8a1f,
   select: 0x29c4d6,
+  changed: 0xb86bff,
 };
 
 function addTo(map: Map<string, THREE.Mesh[]>, id: string, m: THREE.Mesh) {

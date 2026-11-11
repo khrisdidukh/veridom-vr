@@ -1,5 +1,6 @@
 import { applyEdit, type Change } from "./edit/changes";
 import { runChecks, type Finding } from "./edit/checks";
+import { diffHouses, diffSummary, type Diff } from "./edit/diff";
 import type { ChangeKind, Target } from "./edit/impact";
 import { DEMO_HOUSE } from "./house/demo";
 import { cloneHouse, type FurnitureItem, type House } from "./house/model";
@@ -94,6 +95,8 @@ export type AppState = {
   cutaway: CutawaySpec | null;
   /** Measuring tape: pinch two points. */
   measuring: boolean;
+  /** Before/after: the scene shows the plan as it came, not the owner's version. */
+  comparing: boolean;
   /** The guided tour is driving the app. */
   touring: boolean;
   light: LightSettings;
@@ -111,10 +114,15 @@ const STORAGE_KEY = "veridom-vr-changes-v1";
 
 export class Store {
   s: AppState;
+  /** The plan as it came, before any change. */
+  original: House;
+  /** The owner's version, set aside while the original is on show. */
+  private mine: House | null = null;
   private listeners: Listener[] = [];
 
   constructor(private storage: StorageLike | null = browserStorage()) {
     const house = cloneHouse(DEMO_HOUSE);
+    this.original = cloneHouse(house);
     const prefs = loadPrefs(storage);
     this.s = {
       house,
@@ -134,6 +142,7 @@ export class Store {
       cutaway: null,
       measuring: false,
       touring: false,
+      comparing: false,
       site: { phase: "off", showFloor: prefs.showFloor, here: "", heading: 0, fine: false, hold: "session", north: "unset" },
       wallOpacity: prefs.wallOpacity,
       xrayRestore: null,
@@ -227,6 +236,44 @@ export class Store {
     this.s.view = "main";
   }
 
+  /** What the owner changed, compared with the plan as it came. */
+  get diff(): Diff[] {
+    return diffHouses(this.original, this.mine ?? this.s.house);
+  }
+
+  /** Flips between the original plan and the owner's version. Nothing can be edited while the original is on show. */
+  setCompare(on: boolean) {
+    if (on === this.s.comparing) return;
+    if (on) {
+      const d = this.diff;
+      if (!d.length) {
+        this.s.message = "Nothing has changed yet: the plan is still as it came.";
+        this.emit(false);
+        return;
+      }
+      this.mine = this.s.house;
+      this.s.house = cloneHouse(this.original);
+      this.s.message = `This is the plan as it came. What you changed is shown in violet (${diffSummary(d)}). Pinch “Original” again for your version.`;
+    } else if (this.mine) {
+      this.s.house = this.mine;
+      this.mine = null;
+      this.s.message = "Back to your version.";
+    }
+    this.s.comparing = on;
+    this.s.selected = null;
+    this.s.info = null;
+    this.s.findings = runChecks(this.s.house);
+    this.emit(true);
+  }
+
+  /** True (with a message) when a change is refused because the original plan is on show. */
+  private locked(): boolean {
+    if (!this.s.comparing) return false;
+    this.s.message = "This is the original plan. Pinch “Original” again to go back to your version and change things.";
+    this.emit(false);
+    return true;
+  }
+
   /** Shows a footnote; the same target again puts it away. */
   setInfo(t: InfoTarget | null) {
     const same = t && JSON.stringify(t) === JSON.stringify(this.s.info);
@@ -274,6 +321,7 @@ export class Store {
   // Furniture changes are not construction changes: they don't go to the
   // architect's list, but they re-run the checks (a wardrobe can block a door).
   addFurniture(catalogId: string, x: number, z: number, rot: number) {
+    if (this.locked()) return;
     const item: FurnitureItem = { id: `fu-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 5)}`, catalogId, x, z, rot };
     this.s.house = { ...this.s.house, furniture: [...this.s.house.furniture, item] };
     this.s.selected = { type: "furniture", id: item.id };
@@ -282,16 +330,19 @@ export class Store {
   }
 
   moveFurniture(id: string, x: number, z: number) {
+    if (this.locked()) return;
     this.s.house = { ...this.s.house, furniture: this.s.house.furniture.map((f) => (f.id === id ? { ...f, x, z } : f)) };
     this.furnitureChanged();
   }
 
   rotateFurniture(id: string, deg: number) {
+    if (this.locked()) return;
     this.s.house = { ...this.s.house, furniture: this.s.house.furniture.map((f) => (f.id === id ? { ...f, rot: (f.rot + deg) % 360 } : f)) };
     this.furnitureChanged();
   }
 
   removeFurniture(id: string) {
+    if (this.locked()) return;
     this.s.house = { ...this.s.house, furniture: this.s.house.furniture.filter((f) => f.id !== id) };
     if (this.s.selected?.id === id) this.s.selected = null;
     this.furnitureChanged();
@@ -304,7 +355,7 @@ export class Store {
 
   edit(kind: ChangeKind, amount = 0) {
     const t = this.s.selected;
-    if (!t || t.type === "furniture") return;
+    if (!t || t.type === "furniture" || this.locked()) return;
     const r = applyEdit(this.s.house, t, kind, amount, this.s.timeline);
     if ("error" in r) {
       this.s.message = r.error;
@@ -321,6 +372,7 @@ export class Store {
   }
 
   undo() {
+    if (this.locked()) return;
     const prev = this.s.history.pop();
     if (!prev) return;
     // Undo covers construction changes only; furniture stays where it is.

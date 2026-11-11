@@ -293,13 +293,16 @@ export class Panel {
     ctx.textAlign = "left";
     ctx.font = "600 26px system-ui, sans-serif";
     ctx.fillStyle = f.length ? C.warn : C.plan;
-    ctx.fillText(f.length ? `⚠ ${f.length} plan problem${f.length > 1 ? "s" : ""} — shown in orange` : "✓ No plan problems found", 40, y + 30, 700);
+    ctx.fillText(f.length ? `⚠ ${f.length} plan problem${f.length > 1 ? "s" : ""} — shown in orange` : "✓ No plan problems found", 40, y + 30, 500);
     ctx.fillStyle = C.dim;
     ctx.font = "24px system-ui, sans-serif";
     if (s.message) {
       ctx.fillStyle = C.text;
-      wrap(ctx, s.message, 40, y + 66, 700, 30);
-    } else if (f[0]) ctx.fillText(f.map((x) => x.title).join(" · "), 40, y + 66, 700);
+      ctx.font = "22px system-ui, sans-serif";
+      wrap(ctx, s.message, 40, y + 62, 510, 26);
+    } else if (f[0]) ctx.fillText(f.map((x) => x.title).join(" · "), 40, y + 66, 510);
+    // One control flips between the plan as it came and the owner's version.
+    this.btn({ x: 570, y: y + 6, w: 190, h: 62, label: s.comparing ? "◀ Original" : "Original", size: 28, active: s.comparing, onPress: () => store.setCompare(!s.comparing) });
     this.btn({ x: 770, y: y + 6, w: 200, h: 62, label: `Changes (${s.changes.length})`, active: s.view === "changes", onPress: () => store.set({ view: s.view === "changes" ? "main" : "changes" }) });
     this.btn({ x: 982, y: y + 6, w: 178, h: 62, label: "Undo", disabled: s.changes.length === 0, onPress: () => store.undo() });
 

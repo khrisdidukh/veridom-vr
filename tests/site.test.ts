@@ -503,3 +503,51 @@ describe("daylight per room", () => {
     expect(roomDaylightNote(DEMO_HOUSE, room("hall"), hrs.hall!, 8).lines[1]).toBe("Direct sun: none, all year");
   });
 });
+
+import { diffHouses, diffSummary } from "../src/edit/diff";
+describe("before and after", () => {
+  it("lists what was changed, added and removed", () => {
+    const s = new Store(memory());
+    expect(s.diff).toEqual([]);
+    s.select({ type: "door", id: "d-bath" });
+    s.edit("flip-swing");
+    s.addFurniture("wardrobe", 3, 3, 0);
+    s.removeFurniture("fu-sofa");
+    s.moveFurniture("fu-bed", 10.5, 2.25);
+    const d = s.diff;
+    expect(d.find((x) => x.id === "d-bath")).toEqual({ id: "d-bath", kind: "changed", label: "Bathroom door" });
+    expect(d.filter((x) => x.kind === "added").map((x) => x.label)).toEqual(["Wardrobe"]);
+    expect(d.filter((x) => x.kind === "removed").map((x) => x.id)).toEqual(["fu-sofa"]);
+    expect(d.find((x) => x.id === "fu-bed")?.kind).toBe("changed");
+    expect(diffSummary(d)).toBe("2 changed · 1 added · 1 removed");
+    expect(diffSummary([])).toBe("nothing changed");
+    expect(diffHouses(DEMO_HOUSE, DEMO_HOUSE)).toEqual([]);
+  });
+
+  it("flips to the original and back without losing anything", () => {
+    const s = new Store(memory());
+    s.setCompare(true); // nothing changed yet: stays off
+    expect(s.s.comparing).toBe(false);
+    s.select({ type: "door", id: "d-bath" });
+    s.edit("flip-swing");
+    expect(s.s.findings).toHaveLength(1);
+    const mine = s.s.house;
+    s.setCompare(true);
+    expect(s.s.comparing).toBe(true);
+    expect(s.s.house.openings.find((o) => o.id === "d-bath")!.swing).toBe("right");
+    expect(s.s.findings).toHaveLength(2); // the original still has both problems
+    expect(s.diff).toHaveLength(1);
+    // Nothing can be changed while the original is on show.
+    s.select({ type: "door", id: "d-bed" });
+    s.edit("flip-swing");
+    s.addFurniture("sofa", 1, 1, 0);
+    s.undo();
+    expect(s.s.changes).toHaveLength(1);
+    expect(s.s.message).toMatch(/original plan/);
+    s.setCompare(false);
+    expect(s.s.house).toBe(mine);
+    expect(s.s.findings).toHaveLength(1);
+    s.undo();
+    expect(s.diff).toEqual([]);
+  });
+});
