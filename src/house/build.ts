@@ -28,6 +28,8 @@ export type Built = {
   floors: THREE.Object3D[];
   floorMats: THREE.MeshStandardMaterial[];
   ceilingMat: THREE.MeshStandardMaterial;
+  /** Pipes, cables and the distribution board; each carries userData.info for the footnotes. */
+  services: THREE.Mesh[];
 };
 
 const P = (x: number, y: number, z: number) => new THREE.Vector3(x, y, -z);
@@ -244,20 +246,26 @@ export function buildHouse(h: House): Built {
 
   // Stage 3 — rough-in: pipes, cables from the panel, wall boxes.
   const roughIn = stageGroups[3]!;
+  const services: THREE.Mesh[] = [];
+  const service = (m: THREE.Mesh, id: string) => {
+    m.userData.info = { kind: "service", service: id };
+    services.push(m);
+    return m;
+  };
   for (const p of h.pipes) {
     const color = p.kind === "cold" ? COLORS.cold : p.kind === "hot" ? COLORS.hot : COLORS.drain;
-    roughIn.add(tube(p.points.map((q) => P(q.x, q.y, q.z)), p.kind === "drain" ? 0.05 : 0.016, color));
+    roughIn.add(service(tube(p.points.map((q) => P(q.x, q.y, q.z)), p.kind === "drain" ? 0.05 : 0.016, color), p.kind));
   }
   const panel = wallFacePoint(h, h.panel.wallId, h.panel.offset, h.panel.side, 0.02);
   const panelBox = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.55, 0.06), solid(0xc9c9c9, 0.5, 0.3));
   panelBox.position.copy(P(panel.x, h.panel.height, panel.z));
   panelBox.rotation.y = panel.rotY;
-  roughIn.add(panelBox);
+  roughIn.add(service(panelBox, "board"));
   const cableY = H - 0.15;
   for (const pt of h.points) {
     const f = wallFacePoint(h, pt.wallId, pt.offset, pt.side, -0.02);
     const pts = [P(panel.x, h.panel.height + 0.3, panel.z), P(panel.x, cableY, panel.z), P(f.x, cableY, f.z), P(f.x, pt.height, f.z)];
-    const c = tube(pts, 0.008, COLORS.cable);
+    const c = service(tube(pts, 0.008, COLORS.cable), "cable");
     roughIn.add(c);
     addTo(byElement, pt.id, c);
     const boxMesh = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, 0.05, 16), solid(0x2b5fa8, 0.5));
@@ -327,7 +335,7 @@ export function buildHouse(h: House): Built {
   }
 
   // Fewer draw calls for the headset: merge everything that is never picked or highlighted on its own.
-  const special = new Set<THREE.Object3D>([grass, slabMesh, ...pickables]);
+  const special = new Set<THREE.Object3D>([grass, slabMesh, ...pickables, ...services]);
   for (const list of byElement.values()) for (const m of list) special.add(m);
   const inKept = (m: THREE.Object3D) => { for (let o: THREE.Object3D | null = m; o; o = o.parent) if (o === ceiling || o === floorGroup) return true; return false; };
   for (const g of stageGroups) mergeByMaterial(g, (m) => special.has(m) || inKept(m));
@@ -335,7 +343,7 @@ export function buildHouse(h: House): Built {
   const mergedWalls: THREE.Mesh[] = [];
   shell.traverse((o) => { if (o instanceof THREE.Mesh && o.material === wallBrick) mergedWalls.push(o); });
 
-  return { root, stageGroups, walls: mergedWalls, wallBrick, wallPlaster, ghostWalls, roughIn, ceiling, pickables, byElement, lampPoints, grass, floors: [slabMesh, floorGroup], floorMats: [slabMat, floorWood, floorTiles], ceilingMat };
+  return { root, stageGroups, walls: mergedWalls, wallBrick, wallPlaster, ghostWalls, roughIn, ceiling, pickables, byElement, lampPoints, grass, floors: [slabMesh, floorGroup], floorMats: [slabMat, floorWood, floorTiles], ceilingMat, services };
 }
 
 /** Orients a fixture with its back to the nearest edge of its room. */

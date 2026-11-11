@@ -4,6 +4,8 @@ import { labelFor, type Store } from "../state";
 import { CATALOG } from "../furnish/catalog";
 import { MONTHS, compass } from "../env/sun";
 import type { Weather } from "../env/environment";
+import { ASSEMBLIES, ASSEMBLY_IDS, insulationShare, thickness, type AssemblyId } from "../info/catalog";
+import { assemblySummary, noteFor } from "../info/notes";
 
 // One control panel drawn on a canvas. In the headset it is a texture on a
 // floating plane; on a desktop the same canvas sits in the page. Hits arrive
@@ -69,7 +71,7 @@ export class Panel {
   onRedraw: () => void = () => {};
   onExport: (text: string) => void = () => {};
 
-  constructor(private store: Store, private hooks: { enterRoom: (id: string) => void; turn: (deg: number) => void; rotateModel: (deg: number) => void; addFurniture: (catalogId: string) => void; site: SiteHooks }) {
+  constructor(private store: Store, private hooks: { enterRoom: (id: string) => void; turn: (deg: number) => void; rotateModel: (deg: number) => void; addFurniture: (catalogId: string) => void; site: SiteHooks; layers: { open: (a: AssemblyId) => void } }) {
     this.canvas = document.createElement("canvas");
     this.canvas.width = W;
     this.canvas.height = H;
@@ -255,6 +257,7 @@ export class Panel {
     if (s.mode === "site" && (aligning || s.site.phase === "adjust")) this.drawSite(y);
     else if (s.view === "changes") this.drawChanges(y);
     else if (s.view === "light") this.drawLight(y);
+    else if (s.view === "layers" && !s.selected) this.drawLayers(y);
     else if (s.view === "furnish" && s.selected?.type !== "furniture") this.drawCatalog(y);
     else if (s.selected?.type === "furniture") this.drawFurniture(y);
     else this.drawSelection(y);
@@ -353,7 +356,72 @@ export class Panel {
       this.btn({ x, y, w, h: 60, label, active, size: 26, onPress });
       x += w + 10;
     };
+    add("Layers", 120, s.view === "layers", () => store.set({ view: s.view === "layers" ? "main" : "layers", selected: null }));
+    add("Measure", 130, s.measuring, () => store.set({ measuring: !s.measuring, message: s.measuring ? "" : "Measuring tape: pinch a first point, then a second." }));
     if (s.mode === "site") add("Floor", 110, s.site.showFloor, () => store.setSite({ showFloor: !s.site.showFloor }));
+  }
+
+  /** What the house is made of: pick a build-up, then a layer. */
+  private drawLayers(y: number) {
+    const { ctx, store } = this;
+    const s = store.s;
+    const open = s.cutaway?.assembly ?? null;
+    const bw = (W - 140 - 3 * 10) / 4;
+    ASSEMBLY_IDS.forEach((id, i) => this.btn({ x: 70 + i * (bw + 10), y: y + 20, w: bw, h: 62, label: ASSEMBLIES[id].name, size: 26, active: open === id, onPress: () => this.hooks.layers.open(id) }));
+    ctx.textAlign = "left";
+    if (!open) {
+      ctx.fillStyle = C.text;
+      ctx.font = "600 30px system-ui, sans-serif";
+      ctx.fillText("See inside the walls, floor and roof", 70, y + 136);
+      ctx.fillStyle = C.dim;
+      ctx.font = "26px system-ui, sans-serif";
+      wrap(ctx, "Pinch a wall — or one of the buttons above — and it slides apart into its real layers, at true thickness. Pinch a layer to read what it does, why it matters and when it is built. Pinch the wall again to close it.", 70, y + 182, W - 160, 36);
+      return;
+    }
+    const a = ASSEMBLIES[open];
+    const info = s.info?.kind === "layer" && s.info.assembly === open ? s.info : null;
+    const layer = info ? a.layers.find((l) => l.id === info.layer) : null;
+    ctx.fillStyle = C.text;
+    ctx.font = "700 30px system-ui, sans-serif";
+    ctx.fillText(layer ? `${layer.name} · ${thickness(layer.mm)}` : a.name, 70, y + 126, 620);
+    ctx.fillStyle = C.accent;
+    ctx.font = "600 24px system-ui, sans-serif";
+    ctx.textAlign = "right";
+    ctx.fillText(assemblySummary(open), W - 70, y + 126, 440);
+    ctx.textAlign = "left";
+    if (layer) {
+      const n = noteFor(s.house, s.findings, { kind: "layer", assembly: open, layer: layer.id }, s.timeline)!;
+      ctx.fillStyle = C.dim;
+      ctx.font = "25px system-ui, sans-serif";
+      let yy = y + 166;
+      for (const line of n.lines) {
+        const rows = Math.ceil(ctx.measureText(line).width / (W - 160));
+        wrap(ctx, line, 70, yy, W - 160, 31);
+        yy += 31 * Math.max(1, rows) + 4;
+      }
+      ctx.fillStyle = C.accent;
+      ctx.font = "600 23px system-ui, sans-serif";
+      ctx.fillText(n.foot, 70, Math.min(yy + 4, y + 326), W - 160);
+      return;
+    }
+    // The stack as a bar, to scale, with each layer's share of the insulation.
+    ctx.font = "23px system-ui, sans-serif";
+    a.layers.forEach((l, i) => {
+      const yy = y + 150 + i * 30;
+      ctx.fillStyle = C.text;
+      ctx.fillText(`${i + 1}. ${l.name}`, 70, yy + 22, 380);
+      ctx.fillStyle = C.dim;
+      ctx.fillText(thickness(l.mm), 470, yy + 22);
+      const share = insulationShare(a, l);
+      ctx.fillStyle = C.line;
+      roundRect(ctx, 590, yy + 6, 380, 16, 8);
+      ctx.fill();
+      ctx.fillStyle = C.accent;
+      roundRect(ctx, 590, yy + 6, Math.max(8, 380 * share), 16, 8);
+      ctx.fill();
+      ctx.fillStyle = C.dim;
+      ctx.fillText(`${Math.round(share * 100)} % of insulation`, 986, yy + 22, 150);
+    });
   }
 
   /** On-site placement: two pinches on the ground, then fine-tuning. */

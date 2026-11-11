@@ -121,7 +121,7 @@ export class Callout {
   readonly group = new THREE.Group();
   readonly target = new THREE.Vector3();
   /** Sideways and upward offset of the label from its target, in label widths. */
-  offset = new THREE.Vector2(0.75, 0.55);
+  offset = new THREE.Vector2(0.18, 0.22);
   /** Label width in metres per metre of viewing distance. */
   sizePerMetre = 0.34;
   private plane: THREE.Mesh;
@@ -143,18 +143,20 @@ export class Callout {
     const d = Math.max(0.15, eye.distanceTo(this.target));
     const w = THREE.MathUtils.clamp(d * this.sizePerMetre, 0.05, 60);
     const h = w * (this.plane.userData.heightRatio as number);
+    const pw = w * (this.plane.userData.widthRatio as number);
     const right = new THREE.Vector3(1, 0, 0).applyQuaternion(quat);
     right.y = 0;
     if (right.lengthSq() < 1e-6) right.set(1, 0, 0);
     right.normalize();
-    const pos = this.target.clone().addScaledVector(right, w * this.offset.x).add(new THREE.Vector3(0, w * this.offset.y + h / 2, 0));
+    const sx = Math.sign(this.offset.x || 1);
+    const pos = this.target.clone().addScaledVector(right, w * this.offset.x + (sx * pw) / 2).add(new THREE.Vector3(0, w * this.offset.y + h / 2, 0));
     this.plane.position.copy(pos);
     this.plane.quaternion.copy(quat);
     this.plane.scale.setScalar(w);
     this.dot.position.copy(this.target);
     this.dot.scale.setScalar(d * 0.008);
     // Leader: from the spot to the nearest bottom corner of the label.
-    const corner = pos.clone().addScaledVector(right, -Math.sign(this.offset.x || 1) * w * 0.5).add(new THREE.Vector3(0, -h / 2, 0));
+    const corner = pos.clone().addScaledVector(right, (-sx * pw) / 2).add(new THREE.Vector3(0, -h / 2, 0));
     const a = this.line.geometry.getAttribute("position") as THREE.BufferAttribute;
     a.setXYZ(0, this.target.x, this.target.y, this.target.z);
     a.setXYZ(1, corner.x, corner.y, corner.z);

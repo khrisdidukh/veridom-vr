@@ -8,9 +8,15 @@ import { Environment } from "./env/environment";
 import { buildFurniture, setOnModelLoad } from "./furnish/pieces";
 import { catalogById } from "./furnish/catalog";
 import type { FurnitureItem } from "./house/model";
-import { Store, type Selection } from "./state";
+import { Store, type CutawaySpec, type Selection } from "./state";
 import { Panel } from "./ui/panel";
-import { textPlane } from "./ui/label";
+import { Callout, textPlane } from "./ui/label";
+import { Cutaway } from "./info/cutaway";
+import { ASSEMBLIES, type AssemblyId } from "./info/catalog";
+import { clearStretch, nearestWall, outward, wallAt } from "./info/locate";
+import { measure } from "./info/measure";
+import { noteFor, type InfoTarget } from "./info/notes";
+import { alongWall, type Wall } from "./house/model";
 import { alignCornerAt, alignFromTwoPoints, footprint, headingDeg, loadSite, nudge, referenceCorner, rotateAround, roomAt, saveSite, whereAmI, worldToPlan, yawBetween, type Alignment, type WorldPoint } from "./site/align";
 import { SiteXR } from "./site/xr";
 import "./style.css";
@@ -106,6 +112,7 @@ function rebuild() {
     l.add(glow);
     glow.position.set(0, 0, 0);
   }
+  buildDots();
   applyState();
 }
 
@@ -188,12 +195,14 @@ function applyState() {
   built.stageGroups[1]!.scale.y = Math.max(0.001, prog(1));
   built.stageGroups[2]!.scale.y = Math.max(0.001, prog(2));
   const site = s.mode === "site";
-  const op = store.wallOpacity;
+  // An opened wall goes glassy, so the pipes and cables inside it show where they really run.
+  const cutWall = !!s.cutaway && (s.cutaway.assembly === "ext-wall" || s.cutaway.assembly === "int-wall");
+  const op = cutWall ? Math.min(store.wallOpacity, 0.45) : store.wallOpacity;
   built.ceiling.visible = s.mode === "walk" && prog(2) >= 1 && op > 0.01;
   // On the real plot the real ground is the ground: no lawn, no dug-out soil.
   if (site && renderer.xr.isPresenting && passthrough) built.stageGroups[0]!.visible = false;
   built.ghostWalls.visible = prog(2) < 1;
-  built.roughIn.visible = prog(3) > 0 && (prog(4) < 0.5 || s.xray);
+  built.roughIn.visible = (prog(3) > 0 && (prog(4) < 0.5 || s.xray)) || (!!s.cutaway && prog(2) >= 1);
   built.stageGroups[4]!.visible = prog(4) >= 0.5;
   built.stageGroups[5]!.visible = prog(5) > 0.25;
   const wallMat = prog(4) >= 0.5 ? built.wallPlaster : built.wallBrick;
@@ -236,6 +245,10 @@ function applyState() {
   panel.sunInfo = { elevation: env.sunElevation, azimuth: env.sunAzimuth };
   placeWorld();
   placeMarkers();
+  syncCutaway();
+  syncDots();
+  syncNote();
+  syncMeasure();
   refreshShadows();
 }
 
@@ -260,6 +273,7 @@ function placeMarkers() {
     if (box.isEmpty()) continue;
     const c = inner.worldToLocal(box.getCenter(new THREE.Vector3()));
     const m = new THREE.Mesh(markerGeo, markerMat);
+    m.userData.info = { kind: "finding", id: f.id };
     m.position.set(c.x, markerBase(), c.z);
     m.scale.setScalar(store.s.mode !== "model" ? 0.3 : 1);
     markers.add(m);
@@ -508,6 +522,360 @@ function trackSite(now: number) {
   panel.draw();
 }
 
+// ——— Layers, footnotes and the measuring tape. ———
+type Hit =
+  | { kind: "sel"; sel: Selection; point: THREE.Vector3; distance: number }
+  | { kind: "info"; info: InfoTarget; cutaway?: CutawaySpec; point: THREE.Vector3; distance: number }
+  | { kind: "surface"; surface: "wall" | "floor" | "ceiling"; point: THREE.Vector3; distance: number };
+
+const eyePos = new THREE.Vector3();
+const eyeQuat = new THREE.Quaternion();
+const viewerPlan = () => {
+  const l = inner.worldToLocal(viewerAxes().head);
+  return { x: l.x, z: -l.z, y: l.y };
+};
+
+// The opened sample. In the table model it is shown five times larger, as a detail.
+let cut: Cutaway | null = null;
+let cutKey = "";
+const closingCuts: Cutaway[] = [];
+let cutTags: { tag: Callout; slab: number }[] = [];
+let tagKey = "";
+const cutScale = () => (store.s.mode === "model" ? 5 : 1);
+
+function syncCutaway() {
+  const spec = store.s.cutaway;
+  const model = store.s.mode === "model";
+  const key = spec ? `${JSON.stringify(spec)}|${model}` : "";
+  if (key !== cutKey) {
+    cutKey = key;
+    tagKey = "";
+    if (cut) {
+      cut.target = 0;
+      closingCuts.push(cut);
+      cut = null;
+    }
+    if (spec) {
+      const H = store.s.house.storeyHeight;
+      if (spec.assembly === "floor") {
+        cut = new Cutaway("floor", true, 0.9, 0.12, 1);
+        cut.group.rotation.x = -Math.PI / 2;
+        cut.group.position.copy(plan(spec.x, 0.03 - cut.depth / 2, spec.z));
+      } else if (spec.assembly === "roof") {
+        // From inside, the layers hang down from the ceiling; over the table model they rise above it.
+        cut = model ? new Cutaway("roof", false, 0.9, 0.12, 1) : new Cutaway("roof", true, 0.9, 0.045, 1);
+        cut.group.rotation.x = model ? -Math.PI / 2 : Math.PI / 2;
+        cut.group.position.copy(plan(spec.x, H + cut.depth / 2, spec.z));
+      } else {
+        // The wall peels from where it stands: the far layer stays in place inside the (now glassy) wall.
+        cut = new Cutaway(spec.assembly, spec.roomSide, 0.9, 0.15);
+        cut.group.rotation.y = Math.atan2(spec.nx, -spec.nz);
+        cut.group.position.copy(plan(spec.x, model ? Math.max(spec.y, 2.4) : spec.y, spec.z));
+      }
+      cut.group.scale.setScalar(cutScale());
+      inner.add(cut.group);
+    }
+  }
+  // One short tag per layer; the layer that is being explained gets the full footnote instead.
+  const info = store.s.info;
+  const chosen = info?.kind === "layer" ? info.layer : "";
+  const tk = `${cutKey}|${chosen}|${Math.floor(store.s.timeline)}`;
+  if (tk === tagKey) return;
+  tagKey = tk;
+  for (const t of cutTags) t.tag.dispose();
+  cutTags = [];
+  if (!cut) return;
+  cut.slabs.forEach((slab, i) => {
+    const full = slab.layer.id === chosen ? noteFor(store.s.house, store.s.findings, { kind: "layer", assembly: cut!.assembly, layer: slab.layer.id }, store.s.timeline) : null;
+    const tag = new Callout(full ? { title: full.title, lines: full.lines, foot: full.foot } : { title: cut!.tagFor(slab) });
+    tag.sizePerMetre = full ? 0.42 : 0.3;
+    // Layers further back carry their tags higher, so the tags never stack on each other.
+    tag.offset.set(0.05, 0.02 + i * 0.1);
+    scene.add(tag.group);
+    cutTags.push({ tag, slab: i });
+  });
+}
+
+// Footnote for a fitting, a pipe or a plan problem: a label with a leader line to the spot.
+let note: Callout | null = null;
+let noteKey = "";
+/** Where the current footnote points, in house coordinates. */
+let noteAnchor: THREE.Vector3 | null = null;
+
+function syncNote() {
+  const info = store.s.info;
+  const show = info && info.kind !== "layer" && info.kind !== "assembly" ? info : null;
+  const key = show ? `${JSON.stringify(show)}|${Math.floor(store.s.timeline)}|${store.s.findings.map((f) => f.id).join()}|${store.s.changes.length}` : "";
+  if (show?.kind === "element" && built) {
+    // Top centre of the fitting itself.
+    const box = new THREE.Box3();
+    inner.updateMatrixWorld(true);
+    for (const m of built.byElement.get(show.target.id) ?? []) if (m.visible) box.expandByObject(m);
+    if (!box.isEmpty()) {
+      const c = box.getCenter(new THREE.Vector3());
+      noteAnchor = inner.worldToLocal(new THREE.Vector3(c.x, box.max.y - (box.max.y - box.min.y) * 0.25, c.z));
+    }
+  }
+  if (key === noteKey) return;
+  noteKey = key;
+  note?.dispose();
+  note = null;
+  if (!show) return;
+  const text = noteFor(store.s.house, store.s.findings, show, store.s.timeline);
+  if (!text || !noteAnchor) return;
+  note = new Callout({ title: text.title, lines: text.lines, foot: text.foot }, text.tone === "warn" ? COLORS.highlight : COLORS.select);
+  note.sizePerMetre = 0.42;
+  scene.add(note.group);
+}
+
+// "i" dots: small invitations to tap on the things worth knowing about.
+type Dot = { proxy: THREE.Mesh; sprite: THREE.Sprite; show: () => boolean; modelOnly?: boolean; walkOnly?: boolean };
+const dots: Dot[] = [];
+const dotGroup = new THREE.Group();
+inner.add(dotGroup);
+const dotTexture = (() => {
+  const c = document.createElement("canvas");
+  c.width = c.height = 96;
+  const ctx = c.getContext("2d")!;
+  ctx.fillStyle = "rgba(15, 18, 23, 0.9)";
+  ctx.beginPath();
+  ctx.arc(48, 48, 40, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = "#29c4d6";
+  ctx.lineWidth = 7;
+  ctx.stroke();
+  ctx.fillStyle = "#ffffff";
+  ctx.font = "700 58px Georgia, serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText("i", 48, 52);
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+})();
+const dotMat = new THREE.SpriteMaterial({ map: dotTexture, depthTest: false, toneMapped: false, fog: false });
+const dotProxyGeo = new THREE.SphereGeometry(1, 10, 8);
+
+/** A wall sample in the middle of a wall, clear of its doors and windows. */
+function wallSpec(w: Wall, along: number, height: number, towards: { x: number; z: number } | null): CutawaySpec {
+  const h = store.s.house;
+  const a = alongWall(w, clearStretch(h, w, along, 0.45));
+  const out = outward(h, w);
+  // Without a viewer the exterior wall opens into the room, where the owner will stand.
+  const side = towards ? ((towards.x - a.x) * out.x + (towards.z - a.z) * out.z >= 0 ? 1 : -1) : w.exterior ? -1 : 1;
+  return {
+    assembly: w.exterior ? "ext-wall" : "int-wall",
+    x: a.x, z: a.z,
+    y: THREE.MathUtils.clamp(height, 0.55, h.storeyHeight - 0.55),
+    nx: out.x * side, nz: out.z * side,
+    roomSide: w.exterior ? side < 0 : true,
+    wallId: w.id,
+  };
+}
+
+const surfaceSpec = (assembly: "floor" | "roof", x: number, z: number): CutawaySpec => ({ assembly, x, z, y: 0, nx: 0, nz: 1, roomSide: true });
+
+/** Where a build-up opens when it is asked for from the panel: near the viewer, or at its "i" dot. */
+function defaultSpec(assembly: AssemblyId): CutawaySpec {
+  const h = store.s.house;
+  const ext = assembly === "ext-wall";
+  if (assembly === "floor" || assembly === "roof") {
+    if (store.s.mode === "model") return surfaceSpec(assembly, assembly === "floor" ? 3.0 : 8.5, assembly === "floor" ? 1.3 : 6.6);
+    const { head, fwd } = viewerAxes();
+    const l = inner.worldToLocal(head.clone().addScaledVector(fwd, 1.3));
+    return surfaceSpec(assembly, THREE.MathUtils.clamp(l.x, 0.7, 11.3), THREE.MathUtils.clamp(-l.z, 0.7, 8.3));
+  }
+  const pick = (w: Wall) => w.exterior === ext;
+  const vp = viewerPlan();
+  if (store.s.mode === "model") {
+    const w = h.walls.find(pick)!;
+    return wallSpec(w, Math.hypot(w.b.x - w.a.x, w.b.z - w.a.z) / 2, 1.3, vp);
+  }
+  const spot = nearestWall(h, vp, pick)!;
+  return wallSpec(spot.wall, spot.along, 1.3, vp);
+}
+
+function buildDots() {
+  dotGroup.clear();
+  dots.length = 0;
+  if (!built) return;
+  pivot.updateMatrixWorld(true);
+  const h = store.s.house;
+  const H = h.storeyHeight;
+  const prog = (i: number) => stageProgress(store.s.timeline, i);
+  const add = (pos: THREE.Vector3, userData: Record<string, unknown>, show: () => boolean, only?: "model" | "walk") => {
+    const proxy = new THREE.Mesh(dotProxyGeo, proxyMat);
+    proxy.position.copy(pos);
+    proxy.userData = userData;
+    const sprite = new THREE.Sprite(dotMat);
+    sprite.position.copy(pos);
+    sprite.renderOrder = 25;
+    dotGroup.add(proxy, sprite);
+    dots.push({ proxy, sprite, show, modelOnly: only === "model", walkOnly: only === "walk" });
+  };
+  const wallDot = (w: Wall | undefined) => {
+    if (!w) return;
+    const spec = wallSpec(w, Math.hypot(w.b.x - w.a.x, w.b.z - w.a.z) / 2, 1.3, null);
+    const d = w.thickness / 2 + 0.04;
+    add(plan(spec.x + spec.nx * d, 1.3, spec.z + spec.nz * d), { info: { kind: "assembly", assembly: spec.assembly }, cutaway: spec }, () => prog(2) >= 1);
+  };
+  wallDot(h.walls.find((w) => w.exterior));
+  wallDot(h.walls.find((w) => !w.exterior));
+  const floor = surfaceSpec("floor", 3.0, 1.3);
+  add(plan(floor.x, 0.14, floor.z), { info: { kind: "assembly", assembly: "floor" }, cutaway: floor }, () => prog(1) >= 1);
+  const roof = surfaceSpec("roof", 8.5, 6.6);
+  add(plan(roof.x, H - 0.06, roof.z), { info: { kind: "assembly", assembly: "roof" }, cutaway: roof }, () => prog(2) >= 1, "walk");
+  add(plan(roof.x, H + 0.35, roof.z), { info: { kind: "assembly", assembly: "roof" }, cutaway: roof }, () => prog(2) >= 1, "model");
+  // Services: one dot per kind, on the real pipe or box.
+  const seen = new Set<string>();
+  for (const m of built.services) {
+    const id = (m.userData.info as { service: string }).service;
+    if (seen.has(id) || id === "cable") continue;
+    seen.add(id);
+    const box = new THREE.Box3().setFromObject(m);
+    const c = built.root.worldToLocal(box.getCenter(new THREE.Vector3()));
+    if (id !== "board") c.y = Math.max(0.12, c.y);
+    add(c, { info: m.userData.info, anchor: c.clone() }, () => built!.roughIn.visible);
+  }
+}
+
+function syncDots() {
+  const model = store.s.mode === "model";
+  const quiet = store.s.measuring || siteAligning();
+  for (const d of dots) {
+    const on = !quiet && d.show() && !(d.modelOnly && !model) && !(d.walkOnly && model);
+    d.proxy.visible = d.sprite.visible = on;
+    d.sprite.scale.setScalar(model ? 0.45 : 0.1);
+    d.proxy.scale.setScalar(model ? 0.4 : 0.08);
+  }
+}
+
+// Measuring tape.
+let tapeA: THREE.Vector3 | null = null;
+let tapeB: THREE.Vector3 | null = null;
+let tapeLabel: Callout | null = null;
+const tapeMat = new THREE.MeshBasicMaterial({ color: 0xffd23f, depthTest: false, toneMapped: false, fog: false });
+const tapeLine = new THREE.Mesh(new THREE.CylinderGeometry(1, 1, 1, 8), tapeMat);
+const tapeEnds = [0, 1].map(() => new THREE.Mesh(new THREE.SphereGeometry(1, 12, 10), tapeMat));
+const tapeGroup = new THREE.Group();
+tapeGroup.add(tapeLine, ...tapeEnds);
+for (const o of tapeGroup.children) o.renderOrder = 28;
+tapeGroup.visible = false;
+inner.add(tapeGroup);
+
+function tapePoint(world: THREE.Vector3) {
+  const local = inner.worldToLocal(world.clone());
+  if (!tapeA || tapeB) {
+    tapeA = local;
+    tapeB = null;
+    store.set({ message: "First point set. Pinch the second point." });
+  } else {
+    tapeB = local;
+    const r = measure(tapeA, tapeB);
+    store.set({ message: `Measured ${r.title}. Pinch again to start a new measurement.` });
+  }
+}
+
+function syncMeasure() {
+  if (!store.s.measuring) tapeA = tapeB = null;
+  tapeGroup.visible = !!tapeA;
+  tapeLabel?.dispose();
+  tapeLabel = null;
+  if (!tapeA) return;
+  const k = store.s.mode === "model" ? 6 : 1; // thicker on the table model, to stay visible
+  tapeEnds[0]!.position.copy(tapeA);
+  tapeEnds[1]!.position.copy(tapeB ?? tapeA);
+  for (const e of tapeEnds) e.scale.setScalar(0.018 * k);
+  tapeLine.visible = !!tapeB;
+  if (!tapeB) return;
+  const d = tapeB.clone().sub(tapeA);
+  tapeLine.position.copy(tapeA).addScaledVector(d, 0.5);
+  tapeLine.scale.set(0.006 * k, d.length(), 0.006 * k);
+  tapeLine.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), d.clone().normalize());
+  const r = measure(tapeA, tapeB);
+  tapeLabel = new Callout({ title: r.title, lines: r.lines }, 0xffd23f);
+  tapeLabel.sizePerMetre = 0.36;
+  tapeLabel.offset.set(0.03, 0.05);
+  scene.add(tapeLabel.group);
+}
+
+/** Every frame: slide the layers, and keep all labels facing the viewer at a readable size. */
+function updateNotes(dt: number) {
+  const cam = viewCam();
+  cam.getWorldPosition(eyePos);
+  cam.getWorldQuaternion(eyeQuat);
+  cut?.step(dt);
+  for (let i = closingCuts.length - 1; i >= 0; i--) {
+    const c = closingCuts[i]!;
+    c.step(dt);
+    if (c.closedNow) {
+      c.dispose();
+      closingCuts.splice(i, 1);
+    }
+  }
+  const v = new THREE.Vector3();
+  if (cut) {
+    for (const { tag, slab } of cutTags) {
+      const s = cut.slabs[slab]!;
+      // Top corner of the layer, on the side the label stands.
+      tag.target.copy(s.mesh.localToWorld(v.set(s.half, s.half, 0)));
+      tag.update(eyePos, eyeQuat);
+    }
+  }
+  if (note && noteAnchor) {
+    note.target.copy(inner.localToWorld(v.copy(noteAnchor)));
+    note.update(eyePos, eyeQuat);
+  }
+  if (tapeLabel && tapeA && tapeB) {
+    tapeLabel.target.copy(inner.localToWorld(v.copy(tapeA).lerp(tapeB, 0.5)));
+    tapeLabel.update(eyePos, eyeQuat);
+  }
+}
+
+/** What a pinch or click on `hit` does. Returns false when the hit means nothing here. */
+function activate(hit: Hit): boolean {
+  if (store.s.measuring) {
+    tapePoint(hit.point);
+    return true;
+  }
+  if (hit.kind === "sel") {
+    store.select(hit.sel);
+    return true;
+  }
+  if (hit.kind === "info") {
+    if (hit.cutaway) {
+      const cur = store.s.cutaway;
+      const wall = hit.cutaway.wallId ? store.s.house.walls.find((w) => w.id === hit.cutaway!.wallId) : null;
+      if (wall && !(cur && cur.wallId === wall.id)) {
+        // Open towards whoever tapped the dot.
+        const along = Math.hypot(hit.cutaway.x - wall.a.x, hit.cutaway.z - wall.a.z);
+        store.openCutaway(wallSpec(wall, along, hit.cutaway.y, viewerPlan()));
+        return true;
+      }
+      if (cur && cur.assembly === hit.cutaway.assembly && Math.hypot(cur.x - hit.cutaway.x, cur.z - hit.cutaway.z) < 0.01) store.closeCutaway();
+      else store.openCutaway(hit.cutaway);
+      return true;
+    }
+    if (hit.info.kind !== "layer") noteAnchor = inner.worldToLocal(hit.point.clone());
+    store.setInfo(hit.info);
+    return true;
+  }
+  const h = store.s.house;
+  const local = inner.worldToLocal(hit.point.clone());
+  const cur = store.s.cutaway;
+  if (hit.surface === "wall") {
+    const spot = wallAt(h, { x: local.x, z: -local.z });
+    if (!spot) return false;
+    if (cur?.wallId === spot.wall.id && Math.hypot(cur.x - spot.at.x, cur.z - spot.at.z) < 1.2) store.closeCutaway();
+    else store.openCutaway(wallSpec(spot.wall, spot.along, local.y, viewerPlan()));
+    return true;
+  }
+  const assembly = hit.surface === "floor" ? "floor" : "roof";
+  if (cur?.assembly === assembly && Math.hypot(cur.x - local.x, cur.z + local.z) < 1.2) store.closeCutaway();
+  else store.openCutaway(surfaceSpec(assembly, THREE.MathUtils.clamp(local.x, 0.7, 11.3), THREE.MathUtils.clamp(-local.z, 0.7, 8.3)));
+  return true;
+}
+
 // Panel: canvas UI used by both the headset and the desktop.
 const panel = new Panel(store, {
   enterRoom: (id) => {
@@ -523,6 +891,12 @@ const panel = new Panel(store, {
   },
   rotateModel: (deg) => store.set({ modelYaw: (store.s.modelYaw + deg) % 360 }),
   addFurniture: (catalogId) => addFurnitureInView(catalogId),
+  layers: {
+    open: (assembly) => {
+      if (store.s.cutaway?.assembly === assembly) store.closeCutaway();
+      else store.openCutaway(defaultSpec(assembly));
+    },
+  },
   site: {
     enter: () => enterSite(),
     realign: () => startAlign(),
@@ -628,10 +1002,34 @@ function pickables(): THREE.Object3D[] {
   return list;
 }
 
-function pickHit(rc: THREE.Raycaster): { sel: Selection; point: THREE.Vector3; distance: number } | null {
-  const h = rc.intersectObjects(pickables(), false)[0];
-  const sel = h?.object.userData.pick as Selection | undefined;
-  return h && sel ? { sel, point: h.point, distance: h.distance } : null;
+/** Nearest thing under the ray: a fitting, something with a footnote, or a bare wall, floor or ceiling. */
+function pickHit(rc: THREE.Raycaster): Hit | null {
+  if (!built) return null;
+  const list = pickables();
+  const prog = (i: number) => stageProgress(store.s.timeline, i);
+  // Things that carry a footnote: opened layers, "i" dots, problem markers, pipes and cables.
+  if (cut) cut.group.traverse((o) => { if (o instanceof THREE.Mesh) list.push(o); });
+  for (const d of dots) if (d.proxy.visible) list.push(d.proxy);
+  if (markers.visible) list.push(...markers.children);
+  if (built.roughIn.visible) list.push(...built.services);
+  // Bare surfaces. In "Walk in" the floor is for moving, so it is left to the teleport — unless the tape is out.
+  const tape = store.s.measuring;
+  if (prog(2) >= 1 && (tape || built.walls[0]?.visible)) list.push(...built.walls);
+  if (built.ceiling.visible) list.push(...built.ceiling.children);
+  if (prog(1) >= 1 && (tape || store.s.mode !== "walk")) for (const f of built.floors) if (f.visible) f.traverse((o) => { if (o instanceof THREE.Mesh) list.push(o); });
+  const h = rc.intersectObjects(list, false)[0];
+  if (!h) return null;
+  const u = h.object.userData;
+  const base = { point: h.point, distance: h.distance };
+  if (u.pick) return { kind: "sel", sel: u.pick as Selection, ...base };
+  if (u.info) {
+    const point = u.anchor ? inner.localToWorld((u.anchor as THREE.Vector3).clone()) : h.point;
+    return { kind: "info", info: u.info as InfoTarget, cutaway: u.cutaway as CutawaySpec | undefined, ...base, point };
+  }
+  if (built.walls.includes(h.object as THREE.Mesh)) return { kind: "surface", surface: "wall", ...base };
+  let o: THREE.Object3D | null = h.object;
+  for (; o; o = o.parent) if (o === built.ceiling) return { kind: "surface", surface: "ceiling", ...base };
+  return { kind: "surface", surface: "floor", ...base };
 }
 
 // ——— Dragging furniture along the floor (hand or mouse). ———
@@ -688,7 +1086,7 @@ renderer.domElement.addEventListener("pointerdown", (e) => {
   if (renderer.xr.isPresenting) return;
   const ray = mouseRay(e);
   const hit = pickHit(raycaster);
-  if (hit?.sel.type === "furniture") {
+  if (hit?.kind === "sel" && hit.sel.type === "furniture" && !store.s.measuring) {
     controls.enabled = false;
     store.select(hit.sel);
     startDrag(hit.sel.id, ray);
@@ -706,7 +1104,9 @@ renderer.domElement.addEventListener("pointerup", (e) => {
   }
   if (downAt.distanceTo(new THREE.Vector2(e.clientX, e.clientY)) > 6) return; // was an orbit drag
   mouseRay(e);
-  store.select(pickHit(raycaster)?.sel ?? null);
+  const hit = pickHit(raycaster);
+  if (hit) activate(hit);
+  else if (!store.s.measuring) store.select(null);
 });
 
 // XR: hands (and controllers, if any) give a ray; a pinch is "select".
@@ -717,7 +1117,7 @@ type Pointer = {
   cursor: THREE.Mesh;
   panelUV: THREE.Vector2 | null;
   floor: THREE.Vector3 | null;
-  pick: Selection | null;
+  pick: Hit | null;
   dragging: boolean;
   draggingFurniture: boolean;
   /** The XR input behind this pointer, for hit-testing real surfaces. */
@@ -765,13 +1165,14 @@ for (let i = 0; i < 2; i++) {
       if (sitePhase() === "corner") setSiteCorner(p.ground);
       else setSiteDirection(p.ground);
     } else if (p.pick) {
-      store.select(p.pick);
-      if (p.pick.type === "furniture") {
+      activate(p.pick);
+      if (p.pick.kind === "sel" && p.pick.sel.type === "furniture" && !store.s.measuring) {
         raycaster.setFromXRController(p.ctrl as unknown as THREE.XRTargetRaySpace);
-        startDrag(p.pick.id, raycaster.ray);
+        startDrag(p.pick.sel.id, raycaster.ray);
         p.draggingFurniture = true;
       }
-    } else if (store.s.mode === "walk" && p.floor) teleportTo(p.floor);
+    } else if (store.s.measuring && p.floor) tapePoint(p.floor);
+    else if (store.s.mode === "walk" && p.floor) teleportTo(p.floor);
   });
   ctrl.addEventListener("selectend", () => {
     if (p.dragging) panel.release();
@@ -840,11 +1241,11 @@ function updatePointers() {
     } else {
       const hit = pickHit(raycaster);
       if (hit) {
-        p.pick = hit.sel;
+        p.pick = hit;
         dist = hit.distance;
         p.cursor.position.copy(hit.point);
         p.cursor.visible = true;
-      } else if (store.s.mode === "walk") {
+      } else if (store.s.mode === "walk" || store.s.measuring) {
         const fp = raycaster.ray.intersectPlane(floorPlane, new THREE.Vector3());
         if (fp && fp.distanceTo(raycaster.ray.origin) < 12) {
           p.floor = fp;
@@ -972,6 +1373,7 @@ renderer.setAnimationLoop(() => {
     updateSiteXR();
   } else controls.update();
   trackSite(performance.now());
+  updateNotes(dt);
   env.tick(dt);
   const bob = Math.sin(performance.now() / 300) * 0.08;
   markers.children.forEach((m) => {
@@ -1037,5 +1439,5 @@ void boot();
   },
   /** On-site state for automated checks. */
   site: () => ({ phase: sitePhase(), align: siteAlign, preview: sitePreview, here: store.s.site.here, heading: store.s.site.heading, hold: store.s.site.hold, anchor: siteXR.anchorState, anchorId: siteXR.anchorId, features: { ...siteXR.features }, space: siteXR.spaceType, passthrough }),
-  enterSite, siteGhost,
+  enterSite, siteGhost, activate, pickHit, wallAt,
   store, panel, panelMesh, THREE, renderer, pivot, env, camera, controls, placed, inner, pointers };

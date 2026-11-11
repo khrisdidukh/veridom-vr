@@ -5,6 +5,23 @@ import { DEMO_HOUSE } from "./house/demo";
 import { cloneHouse, type FurnitureItem, type House } from "./house/model";
 import { catalogById } from "./furnish/catalog";
 import type { LightSettings } from "./env/environment";
+import type { AssemblyId } from "./info/catalog";
+import type { InfoTarget } from "./info/notes";
+
+/** Where a wall, floor or roof sample is opened into its layers. Plan metres. */
+export type CutawaySpec = {
+  assembly: AssemblyId;
+  x: number;
+  z: number;
+  /** Height of the sample's centre above the floor (walls only). */
+  y: number;
+  /** Plan direction from the surface towards the viewer (walls only). */
+  nx: number;
+  nz: number;
+  /** True when the viewer stands on the room side of the build-up. */
+  roomSide: boolean;
+  wallId?: string;
+};
 
 export type Selection = Target | { type: "furniture"; id: string };
 
@@ -68,7 +85,12 @@ export type AppState = {
   changes: Change[];
   findings: Finding[];
   roomId: string;
-  view: "main" | "changes" | "light" | "furnish";
+  view: "main" | "changes" | "light" | "furnish" | "layers";
+  /** What the floating footnote explains right now. */
+  info: InfoTarget | null;
+  cutaway: CutawaySpec | null;
+  /** Measuring tape: pinch two points. */
+  measuring: boolean;
   light: LightSettings;
   message: string;
   modelYaw: number;
@@ -103,6 +125,9 @@ export class Store {
       light: { hour: 15, month: "sep", weather: "clear" },
       message: "Pinch the timeline to build the house. Pinch a door, window or socket to change it.",
       modelYaw: 0,
+      info: null,
+      cutaway: null,
+      measuring: false,
       site: { phase: "off", showFloor: prefs.showFloor, here: "", heading: 0, fine: false, hold: "session" },
       wallOpacity: prefs.wallOpacity,
       xrayRestore: null,
@@ -196,9 +221,41 @@ export class Store {
     this.s.view = "main";
   }
 
+  /** Shows a footnote; the same target again puts it away. */
+  setInfo(t: InfoTarget | null) {
+    const same = t && JSON.stringify(t) === JSON.stringify(this.s.info);
+    // Tapping a layer twice goes back to the summary of its build-up.
+    this.s.info = same ? (t.kind === "layer" ? { kind: "assembly", assembly: t.assembly } : null) : t;
+    if (t && t.kind !== "element") {
+      this.s.selected = null;
+      if (t.kind === "layer" || t.kind === "assembly") this.s.view = "layers";
+    }
+    this.s.message = "";
+    this.emit(false);
+  }
+
+  openCutaway(spec: CutawaySpec) {
+    this.s.cutaway = spec;
+    this.s.selected = null;
+    this.s.info = { kind: "assembly", assembly: spec.assembly };
+    this.s.view = "layers";
+    this.s.message = "";
+    this.emit(false);
+  }
+
+  closeCutaway() {
+    if (!this.s.cutaway) return;
+    this.s.cutaway = null;
+    if (this.s.info?.kind === "layer" || this.s.info?.kind === "assembly") this.s.info = null;
+    if (this.s.view === "layers") this.s.view = "main";
+    this.emit(false);
+  }
+
   select(t: Selection | null) {
     this.s.selected = t;
+    this.s.info = t && t.type !== "furniture" ? { kind: "element", target: t } : this.s.cutaway ? { kind: "assembly", assembly: this.s.cutaway.assembly } : null;
     if (!(t?.type === "furniture" && this.s.view === "furnish")) this.s.view = t?.type === "furniture" ? "furnish" : "main";
+    if (!t && this.s.cutaway) this.s.view = "layers";
     this.s.message = t ? "" : this.s.message;
     this.emit(false);
   }

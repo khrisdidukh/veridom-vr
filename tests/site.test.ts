@@ -192,3 +192,155 @@ describe("wall opacity", () => {
     expect(s.s.wallOpacity.home).toBe(0.9);
   });
 });
+
+import { ASSEMBLIES, ASSEMBLY_IDS, FITTINGS, SERVICES, insulationShare, layerR, thickness, totalMm, uValue } from "../src/info/catalog";
+import { noteFor } from "../src/info/notes";
+import { clearStretch, nearestWall, outward, wallAt } from "../src/info/locate";
+import { formatLength, measure } from "../src/info/measure";
+import { runChecks } from "../src/edit/checks";
+import { STAGES } from "../src/edit/stages";
+import { wallById } from "../src/house/model";
+
+describe("build-up catalogue", () => {
+  it("gives every layer a size, a λ, a reason and a known stage", () => {
+    const stages = STAGES.map((s) => s.id as string);
+    for (const id of ASSEMBLY_IDS) {
+      const a = ASSEMBLIES[id];
+      expect(a.layers.length).toBeGreaterThanOrEqual(3);
+      expect(new Set(a.layers.map((l) => l.id)).size).toBe(a.layers.length);
+      for (const l of a.layers) {
+        expect(l.mm).toBeGreaterThan(0);
+        expect(l.lambda).toBeGreaterThan(0);
+        expect(l.what.length).toBeGreaterThan(10);
+        expect(l.why.length).toBeGreaterThan(10);
+        expect(l.guide).toMatch(/€/);
+        expect(stages).toContain(l.stage);
+      }
+    }
+    for (const n of [...Object.values(SERVICES), ...Object.values(FITTINGS)]) expect(stages).toContain(n.stage);
+  });
+
+  it("computes U-values from the layers", () => {
+    const wall = ASSEMBLIES["ext-wall"];
+    // 0.13 + 0.015/0.7 + 0.25/0.25 + 0.16/0.031 + 0.01/0.7 + 0.04 = 6.367 m²K/W
+    expect(uValue(wall)).toBeCloseTo(1 / 6.367, 3);
+    expect(totalMm(wall)).toBe(435);
+    // A new Austrian house: walls ≤ 0.35, roof ≤ 0.20, floor to ground ≤ 0.40 W/m²K (OIB guideline 6).
+    expect(uValue(wall)).toBeLessThan(0.35);
+    expect(uValue(ASSEMBLIES.roof)).toBeLessThan(0.2);
+    expect(uValue(ASSEMBLIES.floor)).toBeLessThan(0.4);
+    expect(uValue(ASSEMBLIES["int-wall"])).toBeGreaterThan(1);
+  });
+
+  it("knows the insulation does most of the insulating", () => {
+    const wall = ASSEMBLIES["ext-wall"];
+    const eps = wall.layers.find((l) => l.id === "eps")!;
+    expect(insulationShare(wall, eps)).toBeGreaterThan(0.8);
+    expect(wall.layers.reduce((s, l) => s + insulationShare(wall, l), 0)).toBeCloseTo(1);
+    expect(layerR(eps)).toBeCloseTo(5.161, 2);
+  });
+
+  it("writes thicknesses the way a builder says them", () => {
+    expect(thickness(15)).toBe("15 mm");
+    expect(thickness(250)).toBe("25 cm");
+    expect(thickness(435)).toBe("43.5 cm");
+  });
+});
+
+describe("footnotes", () => {
+  const findings = runChecks(DEMO_HOUSE);
+
+  it("explains a layer and says if it is still free to change", () => {
+    const early = noteFor(DEMO_HOUSE, findings, { kind: "layer", assembly: "ext-wall", layer: "eps" }, 2)!;
+    expect(early.title).toBe("Façade insulation (EPS) · 16 cm");
+    expect(early.lines.join(" ")).toMatch(/λ 0.031/);
+    expect(early.lines.join(" ")).toMatch(/Guide price/);
+    expect(early.foot).toBe("Stage: Plaster & drywall · not built yet — still free to change");
+    expect(noteFor(DEMO_HOUSE, findings, { kind: "layer", assembly: "ext-wall", layer: "eps" }, 3.5)!.foot).toMatch(/being built/);
+    expect(noteFor(DEMO_HOUSE, findings, { kind: "layer", assembly: "ext-wall", layer: "eps" }, 5)!.foot).toMatch(/· built$/);
+    expect(noteFor(DEMO_HOUSE, findings, { kind: "layer", assembly: "floor", layer: "nope" }, 5)).toBeNull();
+  });
+
+  it("describes a door from the plan and warns about its problem", () => {
+    const n = noteFor(DEMO_HOUSE, findings, { kind: "element", target: { type: "door", id: "d-bath" } }, 5)!;
+    expect(n.title).toBe("Bathroom door");
+    expect(n.lines[0]).toBe("80 cm × 210 cm · hinge at the start, opens right");
+    expect(n.lines[1]).toMatch(/^⚠ Bathroom door hits the toilet/);
+    expect(n.tone).toBe("warn");
+    expect(noteFor(DEMO_HOUSE, findings, { kind: "element", target: { type: "window", id: "w-bath" } }, 5)!.tone).toBe("info");
+  });
+
+  it("says what to change for a finding, and covers pipes and fittings", () => {
+    const f = noteFor(DEMO_HOUSE, findings, { kind: "finding", id: "swing-d-bath-f-wc" }, 5)!;
+    expect(f.lines[0]).toMatch(/Flip the swing/);
+    expect(noteFor(DEMO_HOUSE, findings, { kind: "finding", id: "gone" }, 5)).toBeNull();
+    expect(noteFor(DEMO_HOUSE, findings, { kind: "service", service: "drain" }, 0)!.foot).toMatch(/Foundation slab · not built yet/);
+    expect(noteFor(DEMO_HOUSE, findings, { kind: "element", target: { type: "socket", id: "s-bath" } }, 5)!.lines[0]).toBe("110 cm above the floor");
+    expect(noteFor(DEMO_HOUSE, findings, { kind: "element", target: { type: "counter", id: "f-counter" } }, 5)!.lines[0]).toBe("Worktop 90 cm high");
+    expect(noteFor(DEMO_HOUSE, findings, { kind: "assembly", assembly: "roof" }, 5)!.lines[0]).toMatch(/^6 layers · 53.2 cm · U = 0.13/);
+  });
+});
+
+describe("finding the wall you pointed at", () => {
+  it("matches a point on a wall face to that wall", () => {
+    expect(wallAt(DEMO_HOUSE, { x: 3, z: 0.19 })?.wall.id).toBe("ext-s");
+    expect(wallAt(DEMO_HOUSE, { x: 7.07, z: 2 })?.wall.id).toBe("int-1");
+    expect(wallAt(DEMO_HOUSE, { x: 3, z: 2 })).toBeNull();
+    const spot = nearestWall(DEMO_HOUSE, { x: 3, z: 2 }, (w) => w.exterior)!;
+    expect(spot.wall.id).toBe("ext-s");
+    expect(spot.along).toBeCloseTo(3);
+    expect(spot.dist).toBeCloseTo(2);
+  });
+
+  it("knows which way is outdoors", () => {
+    expect(outward(DEMO_HOUSE, wallById(DEMO_HOUSE, "ext-s")).z).toBeCloseTo(-1);
+    expect(outward(DEMO_HOUSE, wallById(DEMO_HOUSE, "ext-n")).z).toBeCloseTo(1);
+    expect(outward(DEMO_HOUSE, wallById(DEMO_HOUSE, "ext-e")).x).toBeCloseTo(1);
+    expect(outward(DEMO_HOUSE, wallById(DEMO_HOUSE, "ext-w")).x).toBeCloseTo(-1);
+  });
+
+  it("keeps the sample off doors, windows and wall ends", () => {
+    const w = wallById(DEMO_HOUSE, "ext-s");
+    // Pointing at the terrace door (1–3 m): the sample moves to the free stretch beside it.
+    const a = clearStretch(DEMO_HOUSE, w, 2, 0.45);
+    expect(a - 0.45 >= 3 - 1e-9 || a + 0.45 <= 1 + 1e-9).toBe(true);
+    expect(clearStretch(DEMO_HOUSE, w, 0, 0.45)).toBeCloseTo(0.45);
+    expect(clearStretch(DEMO_HOUSE, w, 6.5, 0.45)).toBeCloseTo(6.5);
+  });
+});
+
+describe("measuring tape", () => {
+  it("formats lengths", () => {
+    expect(formatLength(0.874)).toBe("87 cm");
+    expect(formatLength(3.4159)).toBe("3.42 m");
+    expect(formatLength(0.999)).toBe("1.00 m");
+  });
+  it("measures in house metres and splits a slanted tape", () => {
+    expect(measure({ x: 0, y: 0, z: 0 }, { x: 3, y: 0, z: 4 })).toEqual({ title: "5.00 m", lines: [], length: 5 });
+    const r = measure({ x: 0, y: 0, z: 0 }, { x: 3, y: 2.6, z: 4 });
+    expect(r.title).toBe("5.64 m");
+    expect(r.lines).toEqual(["5.00 m along · 2.60 m up"]);
+  });
+});
+
+describe("info state", () => {
+  it("opens and closes a build-up and its layers", () => {
+    const s = new Store(memory());
+    const spec = { assembly: "ext-wall" as const, x: 6.5, z: 0, y: 1.3, nx: 0, nz: 1, roomSide: true, wallId: "ext-s" };
+    s.openCutaway(spec);
+    expect(s.s.info).toEqual({ kind: "assembly", assembly: "ext-wall" });
+    expect(s.s.view).toBe("layers");
+    s.setInfo({ kind: "layer", assembly: "ext-wall", layer: "brick" });
+    expect(s.s.info).toEqual({ kind: "layer", assembly: "ext-wall", layer: "brick" });
+    s.setInfo({ kind: "layer", assembly: "ext-wall", layer: "brick" }); // again: back to the summary
+    expect(s.s.info).toEqual({ kind: "assembly", assembly: "ext-wall" });
+    s.select({ type: "door", id: "d-bath" });
+    expect(s.s.info).toEqual({ kind: "element", target: { type: "door", id: "d-bath" } });
+    s.select(null);
+    expect(s.s.info).toEqual({ kind: "assembly", assembly: "ext-wall" });
+    s.closeCutaway();
+    expect(s.s.cutaway).toBeNull();
+    expect(s.s.info).toBeNull();
+    expect(s.s.view).toBe("main");
+  });
+});
