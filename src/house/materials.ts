@@ -48,7 +48,8 @@ export const M = {
   // Painted plaster: clean white paint, the texture only adds a faint relief.
   get plaster() {
     // A warm white: the room reads as lit by daylight, not by a grey sky.
-    return once("plaster", () => new THREE.MeshStandardMaterial({ color: 0xf7f2e8, roughness: 0.9, normalMap: tex("plaster_nor", false), normalScale: new THREE.Vector2(0.3, 0.3) }));
+    // The colour comes from a painted map: a wall is never one flat tone.
+    return once("plaster", () => new THREE.MeshStandardMaterial({ color: 0xffffff, map: paintedPlaster(), roughness: 0.9, normalMap: tex("plaster_nor", false), normalScale: new THREE.Vector2(0.3, 0.3) }));
   },
   get stucco() { return once("stucco", () => pbr("stucco", { color: 0xf4f1ea, normalScale: 0.6 })); },
   get brick() { return once("brick", () => pbr("brick", { color: 0xe8a27a })); },
@@ -74,6 +75,51 @@ export const M = {
   get linen() { return once("linen", () => solid(0xf0ede6, 0.9)); },
   get showerTiles() { return once("showerTiles", () => pbr("tiles", { color: 0xb9b7b2, roughness: 0.6 })); },
 };
+
+/**
+ * Painted plaster, drawn in code: a warm white with soft clouding (how a roller
+ * leaves it) and a fine grain. Tiles every 2.5 m without a visible seam.
+ */
+function paintedPlaster(): THREE.Texture {
+  const N = 256;
+  const c = document.createElement("canvas");
+  c.width = c.height = N;
+  const ctx = c.getContext("2d")!;
+  const img = ctx.createImageData(N, N);
+  // Seamless value noise: lattice points wrap around the tile.
+  let seed = 11;
+  const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+  const lattice = (n: number) => Array.from({ length: n * n }, rnd);
+  const octaves = [4, 9, 23].map((n) => ({ n, v: lattice(n) }));
+  const smooth = (t: number) => t * t * (3 - 2 * t);
+  const sample = (o: { n: number; v: number[] }, u: number, v: number) => {
+    const x = u * o.n, y = v * o.n;
+    const x0 = Math.floor(x), y0 = Math.floor(y);
+    const fx = smooth(x - x0), fy = smooth(y - y0);
+    const at = (i: number, j: number) => o.v[(((j % o.n) + o.n) % o.n) * o.n + (((i % o.n) + o.n) % o.n)]!;
+    return (at(x0, y0) * (1 - fx) + at(x0 + 1, y0) * fx) * (1 - fy) + (at(x0, y0 + 1) * (1 - fx) + at(x0 + 1, y0 + 1) * fx) * fy;
+  };
+  for (let y = 0; y < N; y++) {
+    for (let x = 0; x < N; x++) {
+      const u = x / N, v = y / N;
+      const cloud = sample(octaves[0]!, u, v) * 0.6 + sample(octaves[1]!, u, v) * 0.3 + sample(octaves[2]!, u, v) * 0.1;
+      const grain = rnd();
+      const k = 1 + (cloud - 0.5) * 0.07 + (grain - 0.5) * 0.02;
+      const i = (y * N + x) * 4;
+      img.data[i] = Math.min(255, 247 * k);
+      img.data[i + 1] = Math.min(255, 242 * k);
+      img.data[i + 2] = Math.min(255, 231 * k * (1 - (cloud - 0.5) * 0.02)); // darker patches are a touch warmer
+      img.data[i + 3] = 255;
+    }
+  }
+  ctx.putImageData(img, 0, 0);
+  const t = new THREE.CanvasTexture(c);
+  t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  t.repeat.set(0.4, 0.4);
+  t.colorSpace = THREE.SRGBColorSpace;
+  t.anisotropy = 4;
+  return t;
+}
 
 const made = new Map<string, THREE.Material>();
 function once<T extends THREE.Material>(k: string, f: () => T): T {

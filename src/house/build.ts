@@ -3,6 +3,11 @@ import { doorSwing } from "../edit/checks";
 import { buildCeilingLamp, buildCounter, buildShower, buildSink, buildWc, finishPiece, procUV } from "../furnish/pieces";
 import { M, M as Mat, solid, worldUV } from "./materials";
 import { mergeByMaterial } from "./merge";
+import { RoundedBoxGeometry } from "three/examples/jsm/geometries/RoundedBoxGeometry.js";
+
+/** Rounded edges on frames, casings, sills and skirting. Off in lite mode, where every triangle counts. */
+let detail = true;
+export const setDetail = (on: boolean) => (detail = on);
 import { occlusionBands, type WallRun } from "./ao";
 import { footprint } from "../site/align";
 import { alongWall, wallById, wallFrame, wallLength, type Fixture, type House, type Opening, type Wall } from "./model";
@@ -61,11 +66,11 @@ function shadowed<T extends THREE.Mesh>(m: T): T {
 }
 
 /** A box between two plan points along a wall, from y0 to y1, `thick` across. */
-function wallPiece(w: Wall, from: number, to: number, y0: number, y1: number, material: THREE.Material, thick = w.thickness, across = 0): THREE.Mesh | null {
+function wallPiece(w: Wall, from: number, to: number, y0: number, y1: number, material: THREE.Material, thick = w.thickness, across = 0, bevel = 0): THREE.Mesh | null {
   if (to - from < 0.01 || y1 - y0 < 0.01) return null;
   const { dir, left } = wallFrame(w);
   const len = to - from;
-  const m = new THREE.Mesh(new THREE.BoxGeometry(len, y1 - y0, thick), material);
+  const m = new THREE.Mesh(edged(len, y1 - y0, thick, bevel), material);
   const mid = alongWall(w, (from + to) / 2);
   m.position.copy(P(mid.x + left.x * across, (y0 + y1) / 2, mid.z + left.z * across));
   m.rotation.y = Math.atan2(dir.z, dir.x);
@@ -100,6 +105,12 @@ function jamb(w: Wall, at: number, y0: number, y1: number, facing: 1 | -1, mater
   // A plane looks along +z; turn that to ±the wall direction, (dir.x, 0, −dir.z) in scene axes.
   m.rotation.y = Math.atan2(facing * dir.x, -facing * dir.z);
   return shadowed(m);
+}
+
+/** A box, with softly rounded edges when `bevel` (a radius in metres) is given and detail is on. */
+function edged(w: number, h: number, d: number, bevel: number, segments = 2): THREE.BufferGeometry {
+  const r = Math.min(bevel, w / 2, h / 2, d / 2);
+  return detail && r > 0.001 ? new RoundedBoxGeometry(w, h, d, segments, r) : new THREE.BoxGeometry(w, h, d);
 }
 
 function boxAt(min: { x: number; z: number }, max: { x: number; z: number }, y0: number, y1: number, material: THREE.Material) {
@@ -199,9 +210,9 @@ export function buildHouse(h: House): Built {
     // Skirting boards on both faces (outside, a dark plinth instead).
     for (const [a, b] of fullRuns) {
       runs.push({ wall: w, from: a, to: b });
-      const inner = wallPiece(w, a, b, 0.03, 0.09, skirting, 0.014, w.thickness / 2 + 0.007);
+      const inner = wallPiece(w, a, b, 0.03, 0.11, skirting, 0.016, w.thickness / 2 + 0.008, 0.006);
       if (inner) finish.add(inner);
-      const other = wallPiece(w, a, b, w.exterior ? -0.3 : 0.03, w.exterior ? 0.3 : 0.09, w.exterior ? M.anthracite : skirting, 0.014, -(w.thickness / 2 + 0.007));
+      const other = wallPiece(w, a, b, w.exterior ? -0.3 : 0.03, w.exterior ? 0.3 : 0.11, w.exterior ? M.anthracite : skirting, 0.016, -(w.thickness / 2 + 0.008), w.exterior ? 0 : 0.006);
       if (other) finish.add(other);
     }
     const ghost = wallPiece(w, 0, len, 0, H, ghostMat);
@@ -403,7 +414,7 @@ function addOpeningFinish(h: House, o: Opening, shell: THREE.Group, finish: THRE
   // Own materials per opening, so highlighting one door doesn't tint every frame in the house.
   const M = { white: Mat.white.clone(), anthracite: Mat.anthracite.clone(), chrome: Mat.chrome.clone(), glass: Mat.glass.clone() };
   const frame = (a: number, b: number, y0: number, y1: number, mat: THREE.Material, thick: number, across = 0) => {
-    const m = wallPiece(w, a, b, y0, y1, mat, thick, across);
+    const m = wallPiece(w, a, b, y0, y1, mat, thick, across, 0.006);
     if (m) {
       finish.add(m);
       addTo(byElement, o.id, m);
@@ -416,7 +427,7 @@ function addOpeningFinish(h: House, o: Opening, shell: THREE.Group, finish: THRE
     const frameMat = M.anthracite;
     // Frames go in with the shell (windows are fitted before plaster in Austria).
     const put = (a: number, b: number, y0: number, y1: number) => {
-      const m = wallPiece(w, a, b, y0, y1, frameMat, t);
+      const m = wallPiece(w, a, b, y0, y1, frameMat, t, 0, 0.008);
       if (m) {
         shell.add(m);
         addTo(byElement, o.id, m);
@@ -460,7 +471,7 @@ function addOpeningFinish(h: House, o: Opening, shell: THREE.Group, finish: THRE
   frame(o.offset - c, o.offset + o.width + c, o.height, o.height + c, M.white, casingT);
   const s = doorSwing(h, o);
   const leafMat = (o.id === "d-entry" ? M.anthracite : M.white).clone();
-  const leaf = shadowed(new THREE.Mesh(new THREE.BoxGeometry(o.width - 0.04, o.height - 0.04, 0.04), leafMat));
+  const leaf = shadowed(new THREE.Mesh(edged(o.width - 0.04, o.height - 0.04, 0.04, 0.005), leafMat));
   const pivot = new THREE.Group();
   pivot.position.copy(P(s.hinge.x, 0, s.hinge.z));
   const closedAngle = Math.atan2(s.closedDir.z, s.closedDir.x);

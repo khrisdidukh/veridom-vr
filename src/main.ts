@@ -2,7 +2,7 @@ import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { XRHandModelFactory } from "three/examples/jsm/webxr/XRHandModelFactory.js";
 import { stageProgress } from "./edit/stages";
-import { buildHouse, COLORS, type Built } from "./house/build";
+import { buildHouse, COLORS, setDetail, type Built } from "./house/build";
 import { M, setOnTextureLoad, solid } from "./house/materials";
 import { Environment } from "./env/environment";
 import { buildFurniture, setOnModelLoad } from "./furnish/pieces";
@@ -52,6 +52,7 @@ renderer.xr.setFoveation(1);
 // ?lite=1: a lighter mode for slower headsets (no shadows, slightly lower resolution).
 const QUERY = new URLSearchParams(location.search);
 const LITE = QUERY.has("lite");
+setDetail(!LITE);
 if (LITE) {
   renderer.shadowMap.enabled = false;
   renderer.xr.setFramebufferScaleFactor(0.8);
