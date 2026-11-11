@@ -102,9 +102,11 @@ describe("room under your feet", () => {
   });
 
   it("gives compass headings from plan directions", () => {
-    expect(headingDeg(DEMO_HOUSE, { x: 0, z: 1 })).toBeCloseTo(0);
-    expect(headingDeg(DEMO_HOUSE, { x: 1, z: 0 })).toBeCloseTo(90);
-    expect(headingDeg({ ...DEMO_HOUSE, northOffsetDeg: 30 }, { x: -1, z: 0 })).toBeCloseTo(300);
+    expect(headingDeg(0, { x: 0, z: 1 })).toBeCloseTo(0);
+    expect(headingDeg(0, { x: 1, z: 0 })).toBeCloseTo(90);
+    // True north lies 30° clockwise of plan north: plan north itself then looks 30° west of north.
+    expect(headingDeg(30, { x: 0, z: 1 })).toBeCloseTo(330);
+    expect(headingDeg(30, { x: -1, z: 0 })).toBeCloseTo(240);
   });
 });
 
@@ -254,7 +256,7 @@ describe("footnotes", () => {
     const early = noteFor(DEMO_HOUSE, findings, { kind: "layer", assembly: "ext-wall", layer: "eps" }, 2)!;
     expect(early.title).toBe("Façade insulation (EPS) · 16 cm");
     expect(early.lines.join(" ")).toMatch(/λ 0.031/);
-    expect(early.lines.join(" ")).toMatch(/Guide price/);
+    expect(early.lines.join(" ")).toMatch(/Approx\. price: ≈ €70–100 \/ m² — confirm with your builder/);
     expect(early.foot).toBe("Stage: Plaster & drywall · not built yet — still free to change");
     expect(noteFor(DEMO_HOUSE, findings, { kind: "layer", assembly: "ext-wall", layer: "eps" }, 3.5)!.foot).toMatch(/being built/);
     expect(noteFor(DEMO_HOUSE, findings, { kind: "layer", assembly: "ext-wall", layer: "eps" }, 5)!.foot).toMatch(/· built$/);
@@ -372,5 +374,83 @@ describe("guided tour", () => {
     expect(ramp(0, 5, 10, 5)).toBe(2.5);
     expect(ramp(0, 5, 10, 50)).toBe(5);
     expect(ramp(7, 19, 0, 0)).toBe(19);
+  });
+});
+
+import { fitTwoCorners, northOffsetOf, northYawFromHeading, northYawOf, secondCorner } from "../src/site/align";
+import { headingFromOrientation, Compass } from "../src/site/compass";
+import { dayAndHour } from "../src/env/sun";
+
+describe("real north on site", () => {
+  const northDir = (yaw: number) => ({ x: -Math.sin(yaw), z: -Math.cos(yaw) });
+
+  it("takes north from where the viewer looks", () => {
+    // Looking along world +x and saying "this is north".
+    const n = northYawFromHeading(1, 0);
+    expect(northDir(n).x).toBeCloseTo(1);
+    expect(northDir(n).z).toBeCloseTo(0);
+    // Looking along −z while facing east (heading 90): north is to the left, world −x.
+    const e = northYawFromHeading(0, -1, 90);
+    expect(northDir(e).x).toBeCloseTo(-1);
+    expect(northDir(e).z).toBeCloseTo(0);
+  });
+
+  it("turns north into the plan's north offset and back", () => {
+    // House placed without a turn: plan north is world −z.
+    const a = { x: 0, y: 0, z: 0, yaw: 0 };
+    expect(northOffsetOf(a, northYawFromHeading(0, -1))).toBeCloseTo(0);
+    // Real north is world +x, which is the plan's east: 90° clockwise of plan north.
+    const n = northYawFromHeading(1, 0);
+    expect(northOffsetOf(a, n)).toBeCloseTo(90);
+    expect(headingDeg(northOffsetOf(a, n), { x: 1, z: 0 })).toBeCloseTo(0);
+    // The offset survives a re-placed house: same offset, new yaw, north follows.
+    const b = { x: 3, y: 0, z: 1, yaw: 0.8 };
+    expect(northOffsetOf(b, northYawOf(b, 90))).toBeCloseTo(90);
+  });
+
+  it("is saved with the placement", () => {
+    const st = memory();
+    saveSite(st, { x: 0, y: 0, z: 0, yaw: 0.1, northOffsetDeg: 12.5, space: "local-floor", savedAt: 1 });
+    expect(loadSite(st)!.northOffsetDeg).toBe(12.5);
+    saveSite(st, { x: 0, y: 0, z: 0, yaw: 0.1, space: "local-floor", savedAt: 1 });
+    expect(loadSite(st)!.northOffsetDeg).toBeUndefined();
+  });
+
+  it("reads a compass heading only from absolute readings", () => {
+    expect(headingFromOrientation({ absolute: true, alpha: 90 })).toBe(270);
+    expect(headingFromOrientation({ absolute: false, alpha: 90 })).toBeNull();
+    expect(headingFromOrientation({ webkitCompassHeading: 45 })).toBe(45);
+    expect(headingFromOrientation({ absolute: true, alpha: null })).toBeNull();
+    let fire: (e: Event) => void = () => {};
+    const c = new Compass({ addEventListener: (_n: string, f: (e: Event) => void) => void (fire = f) } as unknown as Window);
+    expect(c.heading()).toBeNull();
+    fire({ absolute: true, alpha: 350 } as unknown as Event);
+    expect(c.heading()).toBe(10);
+    expect(c.heading(Date.now() + 5000)).toBeNull();
+  });
+
+  it("finds the day of the year and the clock hour", () => {
+    const d = dayAndHour(new Date(2026, 5, 21, 13, 30));
+    expect(d.day).toBe(172);
+    expect(d.hour).toBe(13.5);
+  });
+});
+
+describe("third alignment point", () => {
+  it("sets the house between two pegged corners", () => {
+    const sw = referenceCorner(DEMO_HOUSE).corner;
+    const se = secondCorner(DEMO_HOUSE);
+    expect(se.x - sw.x).toBeCloseTo(12.38);
+    // Pegs 12.48 m apart (10 cm too far), along a line turned by 0.3 rad.
+    const A = { x: 1, y: 0, z: 2 };
+    const B = { x: 1 + 12.48 * Math.cos(0.3), y: 0, z: 2 - 12.48 * Math.sin(0.3) };
+    const fit = fitTwoCorners(sw, A, se, B);
+    expect(fit.align.yaw).toBeCloseTo(0.3);
+    expect(fit.measured - fit.planned).toBeCloseTo(0.1);
+    // Each corner misses its peg by half the difference.
+    const a = planToWorld(fit.align, sw);
+    const b = planToWorld(fit.align, se);
+    expect(Math.hypot(a.x - A.x, a.z - A.z)).toBeCloseTo(0.05);
+    expect(Math.hypot(b.x - B.x, b.z - B.z)).toBeCloseTo(0.05);
   });
 });

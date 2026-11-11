@@ -109,15 +109,61 @@ export function whereAmI(h: House, p: Vec2): string {
   return `Outside, ${dist < 10 ? dist.toFixed(1) : Math.round(dist)} m ${side} of the house`;
 }
 
-/** Compass heading (degrees clockwise from true north) of a plan direction. */
-export function headingDeg(h: House, dir: Vec2): number {
+const deg360 = (d: number) => ((d % 360) + 360) % 360;
+
+/**
+ * Compass heading (degrees clockwise from true north) of a plan direction.
+ * `northOffsetDeg` is how far true north lies clockwise of plan north (+z).
+ */
+export function headingDeg(northOffsetDeg: number, dir: Vec2): number {
   const planBearing = (Math.atan2(dir.x, dir.z) * 180) / Math.PI;
-  return ((planBearing + h.northOffsetDeg) % 360 + 360) % 360;
+  return deg360(planBearing - northOffsetDeg);
+}
+
+// ——— Real north ———
+// "North yaw" is the turn around y that carries the world's −z axis onto true
+// north; a positive turn is counter-clockwise seen from above.
+
+/** North yaw when the viewer looks along level direction (fx, fz) and that direction has compass heading `headingDeg`. */
+export function northYawFromHeading(fx: number, fz: number, headingDeg = 0): number {
+  return normAngle(Math.atan2(-fx, -fz) + (headingDeg * Math.PI) / 180);
+}
+
+/** How far true north lies clockwise of the placed house's plan north, in degrees 0…360. */
+export function northOffsetOf(a: Alignment, northYaw: number): number {
+  return deg360(((a.yaw - northYaw) * 180) / Math.PI);
+}
+
+/** North yaw for a placed house whose plan has the given north offset. */
+export function northYawOf(a: Alignment, northOffsetDeg: number): number {
+  return normAngle(a.yaw - (northOffsetDeg * Math.PI) / 180);
+}
+
+/**
+ * Refines a placement with a second known corner: both plan points are put as
+ * close as possible to where they were pegged (the error is shared between
+ * them), and the angle comes from the long line between the pegs.
+ * Also returns how far apart the pegs are, to compare with the plan.
+ */
+export function fitTwoCorners(planA: Vec2, worldA: WorldPoint, planB: Vec2, worldB: WorldPoint, fallbackYaw = 0): { align: Alignment; measured: number; planned: number } {
+  const dir = { x: planB.x - planA.x, z: planB.z - planA.z };
+  const yaw = yawBetween(worldA, worldB, dir) ?? fallbackYaw;
+  const mid = { x: (planA.x + planB.x) / 2, z: (planA.z + planB.z) / 2 };
+  const align = alignCornerAt({ x: (worldA.x + worldB.x) / 2, y: (worldA.y + worldB.y) / 2, z: (worldA.z + worldB.z) / 2 }, mid, yaw);
+  return { align, measured: Math.hypot(worldB.x - worldA.x, worldB.z - worldA.z), planned: Math.hypot(dir.x, dir.z) };
+}
+
+/** The far end of the reference wall: the south-east outer corner. */
+export function secondCorner(h: House): Vec2 {
+  const f = footprint(h);
+  return { x: f.max.x, z: f.min.z };
 }
 
 // ——— Persistence ———
 
 export type SavedSite = Alignment & {
+  /** Real north relative to the plan's north, degrees clockwise; absent until north is set on site. */
+  northOffsetDeg?: number;
   /** Persistent anchor handle, where the browser gives one. */
   anchorId?: string;
   /** Reference space the numbers were taken in. */
@@ -147,6 +193,7 @@ export function loadSite(storage: StorageLike | null | undefined): SavedSite | n
     if (!nums.every((n) => typeof n === "number" && Number.isFinite(n))) return null;
     return {
       x: v.x!, y: v.y!, z: v.z!, yaw: normAngle(v.yaw!),
+      northOffsetDeg: typeof v.northOffsetDeg === "number" && Number.isFinite(v.northOffsetDeg) ? v.northOffsetDeg : undefined,
       anchorId: typeof v.anchorId === "string" ? v.anchorId : undefined,
       space: typeof v.space === "string" ? v.space : "local-floor",
       savedAt: typeof v.savedAt === "number" ? v.savedAt : 0,

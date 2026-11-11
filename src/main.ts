@@ -20,7 +20,10 @@ import { alongWall, type Wall } from "./house/model";
 import { contactShadow } from "./house/ao";
 import { TOUR, ramp, stepAt, type TourAction } from "./tour";
 import { XREstimatedLight } from "three/examples/jsm/webxr/XREstimatedLight.js";
-import { alignCornerAt, alignFromTwoPoints, footprint, headingDeg, loadSite, nudge, referenceCorner, rotateAround, roomAt, saveSite, whereAmI, worldToPlan, yawBetween, type Alignment, type WorldPoint } from "./site/align";
+import { alignCornerAt, alignFromTwoPoints, fitTwoCorners, footprint, headingDeg, loadSite, northOffsetOf, northYawFromHeading, northYawOf, nudge, planToWorld, referenceCorner, rotateAround, roomAt, saveSite, secondCorner, whereAmI, worldToPlan, yawBetween, type Alignment, type WorldPoint } from "./site/align";
+import { Compass } from "./site/compass";
+import { dayAndHour, sunPosition } from "./env/sun";
+import { formatLength } from "./info/measure";
 import { SiteXR } from "./site/xr";
 import "./style.css";
 
@@ -92,6 +95,26 @@ let siteSaveTimer = 0;
 const siteActive = () => store.s.mode === "site";
 const sitePhase = () => store.s.site.phase;
 const siteAligning = () => siteActive() && (sitePhase() === "corner" || sitePhase() === "direction");
+/** A pinch on the ground means "this spot": the two placement steps and the optional third corner. */
+const sitePicking = () => siteAligning() || (siteActive() && sitePhase() === "third");
+/** Where true north is in the XR space, once it has been set on site. */
+let siteNorthYaw: number | null = null;
+const compassSensor = new Compass();
+
+/** The turn that carries the world's −z axis onto true north, for the house as it stands now. */
+function northWorldYaw(): number {
+  const s = store.s;
+  const off = THREE.MathUtils.degToRad(s.house.northOffsetDeg);
+  if (s.mode === "model") return THREE.MathUtils.degToRad(s.modelYaw) - off;
+  if (s.mode === "walk") return walkYaw - off;
+  return siteNorthYaw ?? ((siteAlign ?? sitePreview)?.yaw ?? 0) - off;
+}
+
+/** Puts the sun where it belongs for the house's orientation. */
+function relight() {
+  env.north = northWorldYaw();
+  env.apply(store.s.light);
+}
 
 // Night lights at the ceiling lamps.
 const lampGroup = new THREE.Group();
@@ -265,7 +288,7 @@ function applyState() {
 
   // Inside under a ceiling the eye adapts: the room is shown brighter than the plot outside.
   env.indoors = s.mode === "walk" && built.ceiling.visible;
-  env.apply(s.light);
+  relight();
   reflectSky();
   panel.sunInfo = { elevation: env.sunElevation, azimuth: env.sunAzimuth };
   placeWorld();
@@ -330,7 +353,7 @@ function placeWorld() {
     pivot.rotation.set(0, walkYaw, 0);
     inner.position.copy(plan(walkTarget.x, 0, walkTarget.y)).multiplyScalar(-1);
   }
-  pivot.visible = s.mode !== "site" || (!!siteAlign && (s.site.phase === "adjust" || s.site.phase === "placed"));
+  pivot.visible = s.mode !== "site" || (!!siteAlign && (s.site.phase === "adjust" || s.site.phase === "third" || s.site.phase === "placed"));
   updateSiteGhost();
   pivot.updateMatrixWorld(true);
   // Shadow box around what you look at; lamps scaled with the world (light falls off with distance²).
@@ -422,7 +445,7 @@ function buildSiteGhost() {
 }
 
 function updateSiteGhost() {
-  const a = siteAligning() ? sitePreview : sitePhase() === "adjust" ? siteAlign : null;
+  const a = siteAligning() ? sitePreview : sitePhase() === "adjust" || sitePhase() === "third" ? siteAlign : null;
   siteGhost.visible = siteActive() && renderer.xr.isPresenting && !!a;
   if (!siteGhost.visible || !a) return;
   if (!siteGhost.children.length) buildSiteGhost();
@@ -453,7 +476,8 @@ function enterSite(): void {
   const saved = loadSite(storage);
   if (!saved) return startAlign();
   siteAlign = { x: saved.x, y: saved.y, z: saved.z, yaw: saved.yaw };
-  store.setSite({ phase: "placed", hold: "saved" });
+  siteNorthYaw = saved.northOffsetDeg === undefined ? null : northYawOf(siteAlign, saved.northOffsetDeg);
+  store.setSite({ phase: "placed", hold: "saved", north: siteNorthYaw === null ? "unset" : "gaze" });
   store.set({ message: "The house is back where you left it. If it is off, pinch Re-align." });
   if (saved.anchorId) {
     void siteXR.restore(saved.anchorId).then((ok) => {
@@ -494,8 +518,46 @@ function setSiteDirection(p2: WorldPoint) {
   store.set({ message: "Check the corner pole and the arrow against your pegs, then pinch “Looks right”." });
 }
 
+/** Sets real north from the way the viewer looks: straight north, or along their own shadow. */
+function setNorth(source: "gaze" | "shadow" | "compass") {
+  if (!siteAlign) return;
+  const { fwd } = viewerAxes();
+  let heading = 0;
+  if (source === "shadow") {
+    // A shadow points away from the sun: the sun's bearing right now, plus half a turn.
+    const now = dayAndHour(new Date());
+    const sun = sunPosition(env.place.lat, env.place.lon, now.day, now.hour, now.utcOffset);
+    if (sun.elevation < 3) {
+      store.set({ message: "The sun is too low for a shadow right now. Use “North is where I look”." });
+      return;
+    }
+    heading = sun.azimuth + 180;
+  } else if (source === "compass") {
+    const h = compassSensor.heading();
+    if (h === null) return;
+    heading = h;
+  }
+  siteNorthYaw = northYawFromHeading(fwd.x, fwd.z, heading);
+  store.s.site = { ...store.s.site, north: source };
+  saveSiteSoon();
+  store.set({ message: `North is set${source === "compass" ? " from the compass — check it against the sun" : ""}. The sun now falls on the house as it will on your plot.` });
+}
+
+/** Optional third point: the south-east corner peg. Shares the error between both corners and takes the angle from the long line. */
+function setThirdCorner(p: WorldPoint) {
+  if (!siteAlign) return;
+  const h = store.s.house;
+  const a = referenceCorner(h).corner;
+  const fit = fitTwoCorners(a, planToWorld(siteAlign, a), secondCorner(h), { ...p, y: siteAlign.y }, siteAlign.yaw);
+  siteAlign = fit.align;
+  const off = fit.measured - fit.planned;
+  store.setSite({ phase: "adjust" });
+  store.set({ message: `Your pegs are ${formatLength(fit.measured)} apart; the plan says ${formatLength(fit.planned)} (${off >= 0 ? "+" : "−"}${formatLength(Math.abs(off))}). The house now sits between them.` });
+}
+
 function confirmSite() {
   if (!siteAlign) return;
+  if (siteNorthYaw === null && compassSensor.heading() !== null) setNorth("compass");
   sitePlaceAnchor = true;
   saveSiteSoon();
   store.setSite({ phase: "placed" });
@@ -505,15 +567,15 @@ function confirmSite() {
 function saveSiteSoon() {
   clearTimeout(siteSaveTimer);
   siteSaveTimer = window.setTimeout(() => {
-    if (siteAlign && renderer.xr.isPresenting) saveSite(storage, { ...siteAlign, anchorId: siteXR.anchorId, space: siteXR.spaceType, savedAt: Date.now() });
+    if (siteAlign && renderer.xr.isPresenting) saveSite(storage, { ...siteAlign, northOffsetDeg: siteNorthYaw === null ? undefined : northOffsetOf(siteAlign, siteNorthYaw), anchorId: siteXR.anchorId, space: siteXR.spaceType, savedAt: Date.now() });
   }, 300);
 }
 
 /** Ground under a pointing ray: a real surface when the headset knows one, else the floor plane. */
 function groundPoint(p: Pointer, ray: THREE.Ray): WorldPoint | null {
-  const y = siteP1 && sitePhase() === "direction" ? siteP1.y : 0;
+  const y = sitePhase() === "third" && siteAlign ? siteAlign.y : siteP1 && sitePhase() === "direction" ? siteP1.y : 0;
   const real = siteXR.hit(p.source, renderer.xr.getFrame());
-  if (real && Math.abs(real.y - y) < 1.5) return sitePhase() === "direction" ? { ...real, y } : real;
+  if (real && Math.abs(real.y - y) < 1.5) return sitePhase() === "corner" ? real : { ...real, y };
   if (ray.direction.y > -0.02) return null;
   const hit = ray.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 1, 0), -y), new THREE.Vector3());
   return hit && hit.distanceTo(ray.origin) < 30 ? { x: hit.x, y, z: hit.z } : null;
@@ -522,6 +584,7 @@ function groundPoint(p: Pointer, ray: THREE.Ray): WorldPoint | null {
 /** Live preview of the footprint while a hand points at the ground. */
 function previewSite(g: WorldPoint) {
   const ref = referenceCorner(store.s.house);
+  if (sitePhase() === "third") return;
   if (sitePhase() === "corner") sitePreview = alignCornerAt(g, ref.corner, yawFacingAway());
   else if (siteP1) sitePreview = alignFromTwoPoints(siteP1, g, ref.corner, ref.dir, sitePreview?.yaw ?? 0);
   updateSiteGhost();
@@ -537,7 +600,9 @@ function trackSite(now: number) {
   const at = worldToPlan(siteAlign, head);
   const ahead = worldToPlan(siteAlign, { x: head.x + fwd.x, z: head.z + fwd.z });
   const here = whereAmI(h, at);
-  const heading = Math.round(headingDeg(h, { x: ahead.x - at.x, z: ahead.z - at.z }) / 45) * 45 % 360;
+  // Before north is set on site, headings follow the plan's own north.
+  const north = siteNorthYaw === null ? h.northOffsetDeg : northOffsetOf(siteAlign, siteNorthYaw);
+  const heading = Math.round(headingDeg(north, { x: ahead.x - at.x, z: ahead.z - at.z }) / 45) * 45 % 360;
   const st = store.s.site;
   if (here === st.here && heading === st.heading) return;
   const room = roomAt(h, at);
@@ -766,7 +831,7 @@ function buildDots() {
 
 function syncDots() {
   const model = store.s.mode === "model";
-  const quiet = store.s.measuring || siteAligning();
+  const quiet = store.s.measuring || sitePicking();
   for (const d of dots) {
     const on = !quiet && d.show() && !(d.modelOnly && !model) && !(d.walkOnly && model);
     d.proxy.visible = d.sprite.visible = on;
@@ -1006,6 +1071,7 @@ const panel = new Panel(store, {
   },
   turn: (deg) => {
     walkYaw += THREE.MathUtils.degToRad(deg);
+    relight();
     placeWorld();
     refreshShadows();
   },
@@ -1036,11 +1102,19 @@ const panel = new Panel(store, {
     rotate: (deg) => {
       if (!siteAlign) return;
       siteAlign = rotateAround(siteAlign, deg, viewerAxes().head);
+      relight();
       placeWorld();
+    },
+    north: (source) => setNorth(source),
+    third: () => {
+      if (!siteAlign) return;
+      store.setSite({ phase: sitePhase() === "third" ? "adjust" : "third" });
+      store.set({ message: sitePhase() === "third" ? "Point at the ground at the south-east corner peg and pinch — or stand on it and pinch “Corner at my feet”." : "" });
     },
     cornerAtFeet: () => {
       const { head } = viewerAxes();
-      setSiteCorner({ x: head.x, y: 0, z: head.z });
+      if (sitePhase() === "third") setThirdCorner({ x: head.x, y: 0, z: head.z });
+      else setSiteCorner({ x: head.x, y: 0, z: head.z });
     },
     wallAlongGaze: () => {
       if (!siteP1) return;
@@ -1281,9 +1355,10 @@ for (let i = 0; i < 2; i++) {
     if (p.panelUV) {
       panel.press(p.panelUV.x, p.panelUV.y);
       p.dragging = panel.dragging;
-    } else if (siteAligning()) {
+    } else if (sitePicking()) {
       if (!p.ground) return;
-      if (sitePhase() === "corner") setSiteCorner(p.ground);
+      if (sitePhase() === "third") setThirdCorner(p.ground);
+      else if (sitePhase() === "corner") setSiteCorner(p.ground);
       else setSiteDirection(p.ground);
     } else if (p.pick) {
       activate(p.pick);
@@ -1349,7 +1424,7 @@ function updatePointers() {
       dist = ph.distance;
       p.cursor.position.copy(ph.point);
       p.cursor.visible = true;
-    } else if (siteAligning()) {
+    } else if (sitePicking()) {
       // Placing the house: the ray looks for the ground, nothing else.
       const g = groundPoint(p, raycaster.ray);
       if (g) {
@@ -1445,6 +1520,7 @@ renderer.xr.addEventListener("sessionend", () => {
   // The placement belongs to the headset session; the saved copy brings it back next time.
   stopTour();
   siteAlign = sitePreview = siteP1 = null;
+  siteNorthYaw = null;
   store.s.site = { ...store.s.site, phase: "off", here: "" };
   if (store.s.mode === "site") store.setMode("model");
   else applyState();
@@ -1486,7 +1562,9 @@ function updateSiteXR() {
     const wp = new THREE.Vector3();
     for (const l of ghostLabels) {
       // Readable from anywhere on the plot: the label grows with distance.
-      l.scale.setScalar(Math.max(0.6, l.getWorldPosition(wp).distanceTo(headPos) * 0.4));
+      const far = l.getWorldPosition(wp).distanceTo(headPos);
+      l.visible = far > 0.8; // not in the wearer's face when they stand on the peg
+      l.scale.setScalar(Math.max(0.6, far * 0.4));
       l.lookAt(headPos);
     }
   }
@@ -1578,7 +1656,7 @@ void boot();
     controls.target.set(0, 1.6 + pitch, -0.1);
   },
   /** On-site state for automated checks. */
-  site: () => ({ phase: sitePhase(), align: siteAlign, preview: sitePreview, here: store.s.site.here, heading: store.s.site.heading, hold: store.s.site.hold, anchor: siteXR.anchorState, anchorId: siteXR.anchorId, features: { ...siteXR.features }, space: siteXR.spaceType, passthrough }),
+  site: () => ({ north: store.s.site.north, northOffset: siteAlign && siteNorthYaw !== null ? northOffsetOf(siteAlign, siteNorthYaw) : null, sunDir: env.sun.position.clone().sub(env.sun.target.position).normalize().toArray(), phase: sitePhase(), align: siteAlign, preview: sitePreview, here: store.s.site.here, heading: store.s.site.heading, hold: store.s.site.hold, anchor: siteXR.anchorState, anchorId: siteXR.anchorId, features: { ...siteXR.features }, space: siteXR.spaceType, passthrough }),
   enterSite, siteGhost, activate, pickHit,
   /** Tour controls for automated checks: start it, then step it forward by seconds. */
   tour: { start: startTour, stop: stopTour, advance: (seconds: number) => { for (let t = 0; t < seconds; t += 0.25) updateTour(0.25); return tourStep; } },

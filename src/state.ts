@@ -28,7 +28,9 @@ export type Selection = Target | { type: "furniture"; id: string };
 export type Mode = "model" | "walk" | "site";
 
 /** On-site placement flow: peg a corner, sight along a wall, fine-tune, done. */
-export type SitePhase = "off" | "corner" | "direction" | "adjust" | "placed";
+export type SitePhase = "off" | "corner" | "direction" | "adjust" | "third" | "placed";
+/** How real north was set on site: not yet, by looking north, by looking along one's shadow, or from the device compass. */
+export type NorthSource = "unset" | "gaze" | "shadow" | "compass";
 export type SiteState = {
   phase: SitePhase;
   /** A faint floor helps judge the layout on real ground. */
@@ -41,6 +43,7 @@ export type SiteState = {
   fine: boolean;
   /** How the house is held in place: "anchor", "saved" or "session". */
   hold: string;
+  north: NorthSource;
 };
 
 /** Wall opacity per kind of mode: solid at home, see-through on site so a real obstacle is never hidden. */
@@ -131,7 +134,7 @@ export class Store {
       cutaway: null,
       measuring: false,
       touring: false,
-      site: { phase: "off", showFloor: prefs.showFloor, here: "", heading: 0, fine: false, hold: "session" },
+      site: { phase: "off", showFloor: prefs.showFloor, here: "", heading: 0, fine: false, hold: "session", north: "unset" },
       wallOpacity: prefs.wallOpacity,
       xrayRestore: null,
     };

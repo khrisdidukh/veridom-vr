@@ -5,7 +5,7 @@ import { CATALOG } from "../furnish/catalog";
 import { MONTHS, compass } from "../env/sun";
 import type { Weather } from "../env/environment";
 import { ASSEMBLIES, ASSEMBLY_IDS, insulationShare, thickness, type AssemblyId } from "../info/catalog";
-import { assemblySummary, noteFor } from "../info/notes";
+import { APPROX_NOTE, assemblySummary, noteFor } from "../info/notes";
 
 // One control panel drawn on a canvas. In the headset it is a texture on a
 // floating plane; on a desktop the same canvas sits in the page. Hits arrive
@@ -37,6 +37,10 @@ export type SiteHooks = {
   nudge: (right: number, away: number, up: number) => void;
   rotate: (deg: number) => void;
   cornerAtFeet: () => void;
+  /** Real north: the way I look, the way my shadow falls, or the device compass. */
+  north: (source: "gaze" | "shadow" | "compass") => void;
+  /** Start (or cancel) pegging the optional second corner. */
+  third: () => void;
   wallAlongGaze: () => void;
 };
 
@@ -67,6 +71,8 @@ export class Panel {
   private active: Slider | null = null;
   /** Filled in by the scene: sun height and direction for the light card. */
   sunInfo = { elevation: 0, azimuth: 0 };
+  /** Name of the plot's location, for the light card. */
+  place = "Franzen, Waldviertel";
   dragging = false;
   onRedraw: () => void = () => {};
   onExport: (text: string) => void = () => {};
@@ -200,7 +206,7 @@ export class Panel {
     const aligning = s.mode === "site" && (s.site.phase === "corner" || s.site.phase === "direction");
     if (s.mode === "site") {
       this.btn({ x: 40, y, w: 190, h: 60, label: "Re-align", active: aligning, onPress: () => this.hooks.site.realign() });
-      this.btn({ x: 242, y, w: 170, h: 60, label: "Adjust", active: s.site.phase === "adjust", disabled: aligning, onPress: () => (s.site.phase === "adjust" ? this.hooks.site.confirm() : this.hooks.site.adjust()) });
+      this.btn({ x: 242, y, w: 170, h: 60, label: "Adjust", active: s.site.phase === "adjust" || s.site.phase === "third", disabled: aligning, onPress: () => (s.site.phase === "adjust" ? this.hooks.site.confirm() : this.hooks.site.adjust()) });
       ctx.textAlign = "left";
       ctx.fillStyle = C.text;
       ctx.font = "600 26px system-ui, sans-serif";
@@ -209,7 +215,7 @@ export class Panel {
       ctx.font = "22px system-ui, sans-serif";
       const el = this.sunInfo.elevation;
       const sun = el > 0 ? `sun ${Math.round(el)}° high from the ${compass(this.sunInfo.azimuth)}` : "sun is down";
-      ctx.fillText(aligning ? "Walk slowly. Keep your boundary on." : `Facing ${compass(s.site.heading)} · ${sun}`, 436, y + 54, W - 476);
+      ctx.fillText(aligning ? "Walk slowly. Keep your boundary on." : s.site.north === "unset" ? "North is not set yet — pinch Adjust, then “North is where I look”" : `Facing ${compass(s.site.heading)} · ${sun}`, 436, y + 54, W - 476);
     } else if (s.mode === "walk") {
       const rooms = s.house.rooms;
       const bw = (W - 80 - 10 * (rooms.length + 1)) / (rooms.length + 2);
@@ -254,7 +260,7 @@ export class Panel {
     ctx.fillStyle = C.card;
     roundRect(ctx, 40, y, W - 80, 340, 20);
     ctx.fill();
-    if (s.mode === "site" && (aligning || s.site.phase === "adjust")) this.drawSite(y);
+    if (s.mode === "site" && (aligning || s.site.phase === "adjust" || s.site.phase === "third")) this.drawSite(y);
     else if (s.view === "changes") this.drawChanges(y);
     else if (s.view === "light") this.drawLight(y);
     else if (s.view === "layers" && !s.selected) this.drawLayers(y);
@@ -408,7 +414,7 @@ export class Panel {
     // The stack as a bar, to scale, with each layer's share of the insulation.
     ctx.font = "23px system-ui, sans-serif";
     a.layers.forEach((l, i) => {
-      const yy = y + 150 + i * 30;
+      const yy = y + 146 + i * 27;
       ctx.fillStyle = C.text;
       ctx.fillText(`${i + 1}. ${l.name}`, 70, yy + 22, 380);
       ctx.fillStyle = C.dim;
@@ -423,6 +429,9 @@ export class Panel {
       ctx.fillStyle = C.dim;
       ctx.fillText(`${Math.round(share * 100)} % of insulation`, 986, yy + 22, 150);
     });
+    ctx.fillStyle = C.dim;
+    ctx.font = "italic 21px system-ui, sans-serif";
+    ctx.fillText(`Pinch a layer for details. ${APPROX_NOTE}.`, 70, y + 330, W - 160);
   }
 
   /** On-site placement: two pinches on the ground, then fine-tuning. */
@@ -453,6 +462,15 @@ export class Panel {
       this.btn({ x: 506, y: y + 236, w: 240, h: 70, label: "Back", onPress: () => h.realign() });
       return;
     }
+    if (st.phase === "third") {
+      ctx.fillText("3 · Peg the south-east corner (optional)", 70, y + 56);
+      ctx.fillStyle = C.dim;
+      ctx.font = "26px system-ui, sans-serif";
+      wrap(ctx, "Point at the ground at the other end of the south wall and pinch. The house is then set between both pegs, and you see how far apart they really are.", 70, y + 104, W - 160, 36);
+      this.btn({ x: 70, y: y + 236, w: 420, h: 70, label: "Corner at my feet", tone: "primary", onPress: () => h.cornerAtFeet() });
+      this.btn({ x: 506, y: y + 236, w: 240, h: 70, label: "Back", onPress: () => h.third() });
+      return;
+    }
     // Fine-tuning.
     const step = st.fine ? 0.02 : 0.1;
     const deg = st.fine ? 1 : 5;
@@ -475,7 +493,15 @@ export class Panel {
     this.btn({ x: 790, y: r2, w: 340, h: 66, label: "✓ Looks right", active: true, onPress: () => h.confirm() });
     ctx.fillStyle = C.dim;
     ctx.font = "24px system-ui, sans-serif";
-    wrap(ctx, "The cyan pole is the south-west corner, the orange arrow the south wall. When they sit on your pegs, pinch “Looks right”.", 70, y + 268, W - 160, 32);
+    // Real north and the optional second corner.
+    const r3 = y + 234;
+    this.btn({ x: 70, y: r3, w: 350, h: 62, label: "North is where I look", size: 26, active: st.north === "gaze", onPress: () => h.north("gaze") });
+    this.btn({ x: 430, y: r3, w: 350, h: 62, label: "My shadow points there", size: 26, active: st.north === "shadow", onPress: () => h.north("shadow") });
+    this.btn({ x: 790, y: r3, w: 340, h: 62, label: "+ South-east corner", size: 26, onPress: () => h.third() });
+    ctx.fillStyle = st.north === "unset" ? C.warn : C.dim;
+    ctx.font = "22px system-ui, sans-serif";
+    const how = { unset: "North: not set — look north (or along your own shadow) and pinch the button.", gaze: "North: set by looking north.", shadow: "North: set from your shadow and the time of day.", compass: "North: from the device compass — check it against the sun." }[st.north];
+    ctx.fillText(`${how} Cyan pole = south-west corner.`, 70, y + 326, W - 160);
   }
 
   private openFurnish() {
@@ -541,7 +567,10 @@ export class Panel {
     ctx.font = "24px system-ui, sans-serif";
     const el = this.sunInfo.elevation;
     const sunText = el > 0 ? `Sun ${Math.round(el)}° high, from the ${compass(this.sunInfo.azimuth)}` : "The sun is down";
-    ctx.fillText(`${sunText} · Franzen, Waldviertel`, 330, y + 50, W - 400);
+    // On site the sun only means something once real north is known.
+    const s = store.s;
+    const where = s.mode === "site" && s.site.north === "unset" ? "north not set on site (Adjust → North)" : s.mode === "site" ? `${this.place}, real north` : this.place;
+    ctx.fillText(`${sunText} · ${where}`, 330, y + 50, W - 400);
     // Hour slider 5:00–22:00.
     const sl = { x: 90, y: y + 70, w: W - 180, h: 64 };
     const H0 = 5, H1 = 22;

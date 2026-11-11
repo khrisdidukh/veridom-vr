@@ -15,6 +15,10 @@ export type InfoTarget =
 
 export type NoteText = { title: string; lines: string[]; foot: string; tone: "info" | "warn" };
 
+/** Prices are rough ranges; every place that shows one says so. */
+export const APPROX_NOTE = "Approximate figures — confirm with your builder";
+const approx = (guide: string) => `Approx. price: ≈ ${guide} — confirm with your builder`;
+
 const cm = (m: number) => `${Math.round(m * 100)} cm`;
 
 /** Is this stage already built at timeline value t? Tells the owner if a change is still free. */
@@ -34,7 +38,7 @@ export function noteFor(h: House, findings: Finding[], t: InfoTarget, timeline: 
     const a = ASSEMBLIES[t.assembly];
     return {
       title: a.name,
-      lines: [assemblySummary(t.assembly), `Layers, ${a.order}: ${a.layers.map((l) => l.name.toLowerCase()).join(", ")}.`, "Pinch a layer to see what it does."],
+      lines: [assemblySummary(t.assembly), `Layers, ${a.order}: ${a.layers.map((l) => l.name.toLowerCase()).join(", ")}.`, "Pinch a layer to see what it does.", `${APPROX_NOTE}.`],
       foot: "Pinch the wall again to close it",
       tone: "info",
     };
@@ -46,14 +50,14 @@ export function noteFor(h: House, findings: Finding[], t: InfoTarget, timeline: 
     const share = Math.round(insulationShare(a, l) * 100);
     return {
       title: `${l.name} · ${thickness(l.mm)}`,
-      lines: [l.what, `λ ${l.lambda} W/mK · ${share < 1 ? "under 1" : share} % of the ${a.name.toLowerCase()}'s insulation`, l.why, `Guide price: ${l.guide}`],
+      lines: [l.what, `λ ${l.lambda} W/mK · ${share < 1 ? "under 1" : share} % of the ${a.name.toLowerCase()}'s insulation`, l.why, approx(l.guide)],
       foot: stageLine(l.stage, timeline),
       tone: "info",
     };
   }
   if (t.kind === "service") {
     const s = SERVICES[t.service];
-    return { title: s.title, lines: [s.spec, s.why, `Guide price: ${s.guide}`], foot: stageLine(s.stage, timeline), tone: "info" };
+    return { title: s.title, lines: [s.spec, s.why, approx(s.guide)], foot: stageLine(s.stage, timeline), tone: "info" };
   }
   if (t.kind === "finding") {
     const f = findings.find((x) => x.id === t.id);
@@ -70,16 +74,16 @@ export function noteFor(h: House, findings: Finding[], t: InfoTarget, timeline: 
     const spec = e.type === "door"
       ? `${cm(o.width)} × ${cm(o.height)} · hinge at the ${o.hinge ?? "start"}, opens ${o.swing ?? "right"}`
       : `${cm(o.width)} × ${cm(o.height)} · sill ${cm(o.sill)} above the floor`;
-    return { title: o.label, lines: [spec, ...(problem ? warn : [f.why]), `Guide price: ${f.guide}`], foot: stageLine(f.stage, timeline), tone: problem ? "warn" : "info" };
+    return { title: o.label, lines: [spec, ...(problem ? warn : [f.why]), approx(f.guide)], foot: stageLine(f.stage, timeline), tone: problem ? "warn" : "info" };
   }
   if (e.type === "socket" || e.type === "switch") {
     const p = h.points.find((x) => x.id === e.id);
     if (!p) return null;
     const f = FITTINGS[e.type];
-    return { title: p.label, lines: [`${cm(p.height)} above the floor`, ...(problem ? warn : [f.why]), `Guide price: ${f.guide}`], foot: stageLine(f.stage, timeline), tone: problem ? "warn" : "info" };
+    return { title: p.label, lines: [`${cm(p.height)} above the floor`, ...(problem ? warn : [f.why]), approx(f.guide)], foot: stageLine(f.stage, timeline), tone: problem ? "warn" : "info" };
   }
   const fx = h.fixtures.find((x) => x.id === e.id);
   if (!fx) return null;
   const f = FITTINGS.counter;
-  return { title: fx.label, lines: [`Worktop ${cm(fx.height)} high`, ...(problem ? warn : [f.why]), `Guide price: ${f.guide}`], foot: stageLine(f.stage, timeline), tone: problem ? "warn" : "info" };
+  return { title: fx.label, lines: [`Worktop ${cm(fx.height)} high`, ...(problem ? warn : [f.why]), approx(f.guide)], foot: stageLine(f.stage, timeline), tone: problem ? "warn" : "info" };
 }

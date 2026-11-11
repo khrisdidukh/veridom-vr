@@ -3,7 +3,15 @@
 
 export type SunPos = { elevation: number; azimuth: number }; // degrees; azimuth clockwise from north
 
-export const FRANZEN = { lat: 48.57, lon: 15.33 }; // Franzen, Waldviertel, Lower Austria
+export const FRANZEN = { lat: 48.57, lon: 15.33, name: "Franzen, Waldviertel" }; // Lower Austria
+export type Place = { lat: number; lon: number; name: string };
+
+/** Day of the year (1…366) and local clock hour for a date. */
+export function dayAndHour(d: Date): { day: number; hour: number; utcOffset: number } {
+  const start = new Date(d.getFullYear(), 0, 0);
+  const day = Math.floor((d.getTime() - start.getTime()) / 86400000 - (d.getTimezoneOffset() - start.getTimezoneOffset()) / 1440);
+  return { day, hour: d.getHours() + d.getMinutes() / 60, utcOffset: -d.getTimezoneOffset() / 60 };
+}
 
 export const MONTHS = [
   { id: "mar", label: "March", day: 79, utcOffset: 1 },

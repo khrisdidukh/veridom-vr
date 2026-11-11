@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import { Sky } from "three/examples/jsm/objects/Sky.js";
-import { FRANZEN, MONTHS, sunPosition, type MonthId } from "./sun";
+import { FRANZEN, MONTHS, sunPosition, type MonthId, type Place } from "./sun";
 
 // Sky, sun, clouds, weather and night lights. The sun follows the real path
 // over the plot for the chosen month and hour.
@@ -39,6 +39,10 @@ export class Environment {
   sunAzimuth = 0;
   /** Off in lite mode and at full size on site. */
   shadows = true;
+  /** Turn around y that carries the world's −z axis onto true north: the sun is placed relative to it. */
+  north = 0;
+  /** Where the plot is, for the sun's path. */
+  place: Place = FRANZEN;
   /** Under a ceiling: brighter, warmer fill, as the eye adapts indoors. */
   indoors = false;
   /** The headset supplies the real light (mixed reality): our own sun and sky light step back. */
@@ -95,13 +99,15 @@ export class Environment {
     this.settings = settings;
     const look = LOOK[settings.weather];
     const month = MONTHS.find((m) => m.id === settings.month) ?? MONTHS[2];
-    const sp = sunPosition(FRANZEN.lat, FRANZEN.lon, month.day, settings.hour, month.utcOffset);
+    const sp = sunPosition(this.place.lat, this.place.lon, month.day, settings.hour, month.utcOffset);
     this.sunElevation = sp.elevation;
     this.sunAzimuth = sp.azimuth;
     const el = THREE.MathUtils.degToRad(sp.elevation);
     const az = THREE.MathUtils.degToRad(sp.azimuth);
     // Plan: x east, z north → three (x, y, −z).
     const dir = new THREE.Vector3(Math.sin(az) * Math.cos(el), Math.sin(el), -Math.cos(az) * Math.cos(el)).normalize();
+    // …then turned so that "north" is where north really is for the house as it stands.
+    dir.applyAxisAngle(new THREE.Vector3(0, 1, 0), this.north);
 
     for (const s of [this.sky, this.envSky]) {
       const u = s.material.uniforms;
@@ -151,7 +157,7 @@ export class Environment {
     this.snow.visible = settings.weather === "snow";
 
     this.renderer.toneMappingExposure = (0.55 - 0.15 * day + (look.cover > 0.9 ? 0.25 * day : 0)) * (this.indoors ? 1.3 : 1);
-    if (!this.estimated) this.updateEnvMap(`${settings.weather}|${settings.month}|${settings.hour.toFixed(2)}`);
+    if (!this.estimated) this.updateEnvMap(`${settings.weather}|${settings.month}|${settings.hour.toFixed(2)}|${Math.round((this.north * 180) / Math.PI)}|${this.place.lat}`);
     for (const l of this.lamps) l.visible = this.darkness > 0.05;
   }
 
