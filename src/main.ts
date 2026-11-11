@@ -24,6 +24,8 @@ import { alignCornerAt, alignFromTwoPoints, fitTwoCorners, footprint, headingDeg
 import { Compass } from "./site/compass";
 import { dayAndHour, sunPosition } from "./env/sun";
 import { formatLength } from "./info/measure";
+import { roomDaylightNote } from "./info/daylight";
+import { MONTHS } from "./env/sun";
 import { SiteXR } from "./site/xr";
 import "./style.css";
 
@@ -110,8 +112,12 @@ function northWorldYaw(): number {
   return siteNorthYaw ?? ((siteAlign ?? sitePreview)?.yaw ?? 0) - off;
 }
 
+/** True north clockwise of plan north, in degrees: the plan's own value until north is set on site. */
+const northOffsetNow = () => (siteActive() && siteAlign && siteNorthYaw !== null ? northOffsetOf(siteAlign, siteNorthYaw) : store.s.house.northOffsetDeg);
+
 /** Puts the sun where it belongs for the house's orientation. */
 function relight() {
+  panel.northOffset = northOffsetNow();
   env.north = northWorldYaw();
   env.apply(store.s.light);
 }
@@ -296,6 +302,7 @@ function applyState() {
   syncCutaway();
   syncDots();
   syncNote();
+  syncRoomNotes();
   syncMeasure();
   refreshShadows();
 }
@@ -718,6 +725,31 @@ function syncNote() {
   scene.add(note.group);
 }
 
+// Daylight footnotes: one per room while the daylight chart is open.
+let roomNotes: { note: Callout; at: THREE.Vector3 }[] = [];
+let roomNotesKey = "";
+function syncRoomNotes() {
+  const s = store.s;
+  const on = s.view === "daylight" && !sitePicking();
+  const model = s.mode === "model";
+  const key = on ? `${model}|${s.light.month}|${Math.round(panel.northOffset)}|${s.house.openings.map((o) => o.offset + o.width).join()}` : "";
+  if (key === roomNotesKey) return;
+  roomNotesKey = key;
+  for (const r of roomNotes) r.note.dispose();
+  roomNotes = [];
+  if (!on) return;
+  const hours = panel.sunHours();
+  const month = Math.min(11, Math.floor((MONTHS.find((m) => m.id === s.light.month)?.day ?? 0) / 30.5));
+  for (const r of s.house.rooms) {
+    const text = roomDaylightNote(s.house, r, hours[r.id] ?? [], month, Math.round(panel.northOffset));
+    const note = new Callout(text, (hours[r.id]?.[month] ?? 0) > 0 ? 0xffc94a : 0x8fa0b3);
+    note.sizePerMetre = model ? 0.2 : 0.3;
+    note.offset.set(0.02, 0.06);
+    scene.add(note.group);
+    roomNotes.push({ note, at: plan((r.min.x + r.max.x) / 2, model ? s.house.storeyHeight + 0.1 : 1.1, (r.min.z + r.max.z) / 2) });
+  }
+}
+
 // "i" dots: small invitations to tap on the things worth knowing about.
 type Dot = { proxy: THREE.Mesh; sprite: THREE.Sprite; show: () => boolean; modelOnly?: boolean; walkOnly?: boolean };
 const dots: Dot[] = [];
@@ -917,6 +949,10 @@ function updateNotes(dt: number) {
   if (note && noteAnchor) {
     note.target.copy(inner.localToWorld(v.copy(noteAnchor)));
     note.update(eyePos, eyeQuat);
+  }
+  for (const r of roomNotes) {
+    r.note.target.copy(inner.localToWorld(v.copy(r.at)));
+    r.note.update(eyePos, eyeQuat);
   }
   if (tapeLabel && tapeA && tapeB) {
     tapeLabel.target.copy(inner.localToWorld(v.copy(tapeA).lerp(tapeB, 0.5)));

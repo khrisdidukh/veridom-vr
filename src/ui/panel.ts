@@ -6,6 +6,8 @@ import { MONTHS, compass } from "../env/sun";
 import type { Weather } from "../env/environment";
 import { ASSEMBLIES, ASSEMBLY_IDS, insulationShare, thickness, type AssemblyId } from "../info/catalog";
 import { APPROX_NOTE, assemblySummary, noteFor } from "../info/notes";
+import { MONTH_NAMES, sunHours } from "../info/daylight";
+import { FRANZEN, type Place } from "../env/sun";
 
 // One control panel drawn on a canvas. In the headset it is a texture on a
 // floating plane; on a desktop the same canvas sits in the page. Hits arrive
@@ -73,6 +75,22 @@ export class Panel {
   sunInfo = { elevation: 0, azimuth: 0 };
   /** Name of the plot's location, for the light card. */
   place = "Franzen, Waldviertel";
+  /** Where the plot is and how real north lies to the plan, for the daylight chart. */
+  location: Place = FRANZEN;
+  northOffset = 0;
+  private hoursKey = "";
+  private hours: Record<string, number[]> = {};
+
+  /** Hours of direct sun per room and month; recomputed only when the plan or north changes. */
+  sunHours(): Record<string, number[]> {
+    const h = this.store.s.house;
+    const key = `${h.name}|${h.openings.map((o) => `${o.id}:${o.offset}:${o.width}`).join()}|${Math.round(this.northOffset)}|${this.location.lat}`;
+    if (key !== this.hoursKey) {
+      this.hoursKey = key;
+      this.hours = sunHours(h, this.location, Math.round(this.northOffset));
+    }
+    return this.hours;
+  }
   dragging = false;
   onRedraw: () => void = () => {};
   onExport: (text: string) => void = () => {};
@@ -239,8 +257,8 @@ export class Panel {
     ctx.textAlign = "left";
     ctx.fillStyle = C.text;
     ctx.font = "600 26px system-ui, sans-serif";
-    ctx.fillText(`Walls ${Math.round(op * 100)} %`, 40, y + 40, 160);
-    const ws = { x: 220, y, w: 400, h: 60 };
+    ctx.fillText(`Walls ${Math.round(op * 100)} %`, 40, y + 40, 150);
+    const ws = { x: 205, y, w: 320, h: 60 };
     ctx.fillStyle = C.line;
     roundRect(ctx, ws.x, ws.y + 22, ws.w, 16, 8);
     ctx.fill();
@@ -264,6 +282,7 @@ export class Panel {
     else if (s.view === "changes") this.drawChanges(y);
     else if (s.view === "light") this.drawLight(y);
     else if (s.view === "layers" && !s.selected) this.drawLayers(y);
+    else if (s.view === "daylight" && !s.selected) this.drawDaylight(y);
     else if (s.view === "furnish" && s.selected?.type !== "furniture") this.drawCatalog(y);
     else if (s.selected?.type === "furniture") this.drawFurniture(y);
     else this.drawSelection(y);
@@ -357,15 +376,71 @@ export class Panel {
   private toolButtons(y: number) {
     const { store } = this;
     const s = store.s;
-    let x = 660;
+    let x = 560;
     const add = (label: string, w: number, active: boolean, onPress: () => void) => {
       this.btn({ x, y, w, h: 60, label, active, size: 26, onPress });
       x += w + 10;
     };
-    add("Layers", 120, s.view === "layers", () => store.set({ view: s.view === "layers" ? "main" : "layers", selected: null }));
-    add("Measure", 130, s.measuring, () => store.set({ measuring: !s.measuring, message: s.measuring ? "" : "Measuring tape: pinch a first point, then a second." }));
-    if (s.mode !== "site") add(s.touring ? "Stop tour" : "▶ Tour", 150, s.touring, () => this.hooks.tour());
-    if (s.mode === "site") add("Floor", 110, s.site.showFloor, () => store.setSite({ showFloor: !s.site.showFloor }));
+    add("Layers", 105, s.view === "layers", () => store.set({ view: s.view === "layers" ? "main" : "layers", selected: null }));
+    add("Daylight", 125, s.view === "daylight", () => store.set({ view: s.view === "daylight" ? "main" : "daylight", selected: null }));
+    add("Measure", 120, s.measuring, () => store.set({ measuring: !s.measuring, message: s.measuring ? "" : "Measuring tape: pinch a first point, then a second." }));
+    if (s.mode !== "site") add(s.touring ? "Stop" : "▶ Tour", 105, s.touring, () => this.hooks.tour());
+    if (s.mode === "site") add("Floor", 100, s.site.showFloor, () => store.setSite({ showFloor: !s.site.showFloor }));
+  }
+
+  /** Hours of direct sun per room, month by month, as a heat map. */
+  private drawDaylight(y: number) {
+    const { ctx, store } = this;
+    const s = store.s;
+    const hours = this.sunHours();
+    const rooms = s.house.rooms.slice(0, 6);
+    const unset = s.mode === "site" && s.site.north === "unset";
+    ctx.textAlign = "left";
+    ctx.fillStyle = C.text;
+    ctx.font = "600 28px system-ui, sans-serif";
+    ctx.fillText("Direct sun through the windows, hours a day", 70, y + 44, 640);
+    ctx.fillStyle = unset ? C.warn : C.dim;
+    ctx.font = "22px system-ui, sans-serif";
+    ctx.textAlign = "right";
+    ctx.fillText(unset ? "Plan north used — set real north in Adjust" : `${this.place}${s.mode === "site" ? ", real north" : ""}`, W - 70, y + 44, 400);
+    const x0 = 290;
+    const cw = (W - 70 - x0) / 12;
+    const now = MONTHS.find((m) => m.id === s.light.month)?.day ?? 0;
+    const current = Math.min(11, Math.floor(now / 30.5));
+    ctx.textAlign = "center";
+    ctx.font = "21px system-ui, sans-serif";
+    MONTH_NAMES.forEach((m, i) => {
+      ctx.fillStyle = i === current ? C.text : C.dim;
+      ctx.fillText(m, x0 + cw * (i + 0.5), y + 78);
+    });
+    const rh = Math.min(38, 216 / Math.max(1, rooms.length));
+    rooms.forEach((r, ri) => {
+      const yy = y + 90 + ri * rh;
+      ctx.textAlign = "left";
+      ctx.fillStyle = s.roomId === r.id ? C.text : C.dim;
+      ctx.font = "23px system-ui, sans-serif";
+      ctx.fillText(r.name, 70, yy + rh * 0.66, x0 - 84);
+      (hours[r.id] ?? []).forEach((h, i) => {
+        // No sun: slate. A long sunny day: warm yellow.
+        const f = Math.min(1, h / 10);
+        ctx.fillStyle = h === 0 ? "#232a33" : `rgb(${Math.round(70 + 185 * f)}, ${Math.round(74 + 126 * f)}, ${Math.round(88 - 20 * f)})`;
+        roundRect(ctx, x0 + cw * i + 2, yy + 2, cw - 4, rh - 4, 6);
+        ctx.fill();
+        if (i === current) {
+          ctx.strokeStyle = "#ffffff";
+          ctx.lineWidth = 2;
+          ctx.stroke();
+        }
+        ctx.fillStyle = f > 0.55 ? "#1b1608" : C.text;
+        ctx.font = "600 20px system-ui, sans-serif";
+        ctx.textAlign = "center";
+        ctx.fillText(h === 0 ? "–" : String(Math.round(h * 10) / 10), x0 + cw * (i + 0.5), yy + rh * 0.66);
+      });
+    });
+    ctx.textAlign = "left";
+    ctx.fillStyle = C.dim;
+    ctx.font = "italic 21px system-ui, sans-serif";
+    ctx.fillText("From the sun's path and where the windows look. Trees, neighbours and roof overhangs are not counted.", 70, y + 330, W - 140);
   }
 
   /** What the house is made of: pick a build-up, then a layer. */

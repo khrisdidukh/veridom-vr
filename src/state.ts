@@ -88,7 +88,7 @@ export type AppState = {
   changes: Change[];
   findings: Finding[];
   roomId: string;
-  view: "main" | "changes" | "light" | "furnish" | "layers";
+  view: "main" | "changes" | "light" | "furnish" | "layers" | "daylight";
   /** What the floating footnote explains right now. */
   info: InfoTarget | null;
   cutaway: CutawaySpec | null;

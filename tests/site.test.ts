@@ -454,3 +454,52 @@ describe("third alignment point", () => {
     expect(Math.hypot(b.x - B.x, b.z - B.z)).toBeCloseTo(0.05);
   });
 });
+
+import { roomDaylightNote, roomWindows, sunEnters, sunHours, windowSides } from "../src/info/daylight";
+import { FRANZEN as PLOT } from "../src/env/sun";
+describe("daylight per room", () => {
+  const room = (id: string) => DEMO_HOUSE.rooms.find((r) => r.id === id)!;
+
+  it("gives each room its own windows", () => {
+    expect(roomWindows(DEMO_HOUSE, room("living")).map((w) => w.opening.id).sort()).toEqual(["w-living", "w-living-w", "w-terrace"]);
+    expect(roomWindows(DEMO_HOUSE, room("bedroom")).map((w) => w.opening.id).sort()).toEqual(["w-bed", "w-bed-e"]);
+    expect(roomWindows(DEMO_HOUSE, room("hall"))).toEqual([]); // the front door is not glazed
+    expect(windowSides(DEMO_HOUSE, room("bedroom"))).toEqual(["east", "south"]);
+    expect(windowSides(DEMO_HOUSE, room("bedroom"), 90)).toEqual(["north", "east"]);
+  });
+
+  it("lets the sun in only from in front of the window", () => {
+    const south = { x: 0, z: -1 };
+    expect(sunEnters(south, 180, 40, 0)).toBe(true);
+    expect(sunEnters(south, 0, 40, 0)).toBe(false);
+    expect(sunEnters(south, 180, 1, 0)).toBe(false); // sun on the horizon
+    expect(sunEnters(south, 270, 30, 0)).toBe(false); // grazing along the wall
+    // Turn the plot: true north 90° clockwise of plan north, so the plan's south wall faces true east.
+    expect(sunEnters(south, 90, 30, 90)).toBe(true);
+    expect(sunEnters(south, 180, 30, 90)).toBe(false);
+  });
+
+  it("counts plausible hours for Franzen", () => {
+    const hrs = sunHours(DEMO_HOUSE, PLOT);
+    for (const r of DEMO_HOUSE.rooms) expect(hrs[r.id]).toHaveLength(12);
+    // South-facing living room: sun on the south side for most of a winter day, and long in June.
+    expect(hrs.living![11]).toBeGreaterThan(6);
+    expect(hrs.living![11]).toBeLessThan(8.5);
+    expect(hrs.living![5]).toBeGreaterThan(hrs.living![11]!);
+    // Bathroom window looks north: no sun in December, some early and late in June.
+    expect(hrs.bath![11]).toBe(0);
+    expect(hrs.bath![5]).toBeGreaterThan(2);
+    expect(hrs.hall!.every((h) => h === 0)).toBe(true);
+    // Turned half round, the bathroom gets the winter sun instead.
+    expect(sunHours(DEMO_HOUSE, PLOT, 180).bath![11]).toBeGreaterThan(6);
+  });
+
+  it("writes the room footnote", () => {
+    const hrs = sunHours(DEMO_HOUSE, PLOT);
+    const n = roomDaylightNote(DEMO_HOUSE, room("bedroom"), hrs.bedroom!, 8);
+    expect(n.title).toBe("Bedroom");
+    expect(n.lines[0]).toBe("22.5 m² · windows face east, south");
+    expect(n.lines[1]).toMatch(/^Direct sun in Sep: \d+(\.\d)? h a day$/);
+    expect(roomDaylightNote(DEMO_HOUSE, room("hall"), hrs.hall!, 8).lines[1]).toBe("Direct sun: none, all year");
+  });
+});
