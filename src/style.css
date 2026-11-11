@@ -38,3 +38,9 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #b9d3e6; }
   border-left: 5px solid #29c4d6; pointer-events: none;
 }
 @media (max-width: 1100px) { .caption { left: 16px; top: auto; bottom: 16px; } }
+.intro .plan { display: block !important; margin: 10px 0 0; font-size: 13px; color: #9aa4b1; }
+.intro .plan label, .intro .plan a { color: #7fe3ef; text-decoration: underline; cursor: pointer; }
+.plan-note { margin-top: 8px; padding: 8px 10px; border-radius: 8px; background: #1d2a2c; font-size: 12.5px; line-height: 1.4; color: #c7cfd8; max-height: 190px; overflow: auto; }
+.plan-note strong { display: block; color: #eef1f4; margin-bottom: 2px; }
+.plan-note.bad { background: #3a2220; }
+.plan-note.bad strong { color: #ffb0a8; }

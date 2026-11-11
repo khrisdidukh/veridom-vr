@@ -113,7 +113,7 @@ describe("room under your feet", () => {
 describe("saved placement", () => {
   it("round-trips through storage", () => {
     const st = memory();
-    const saved = { x: 1.5, y: 0.02, z: -4, yaw: 0.6, anchorId: "abc-123", space: "unbounded", savedAt: 42 };
+    const saved = { x: 1.5, y: 0.02, z: -4, yaw: 0.6, northOffsetDeg: undefined, plan: "Demo house, Waldviertel", anchorId: "abc-123", space: "unbounded", savedAt: 42 };
     expect(saveSite(st, saved)).toBe(true);
     expect(loadSite(st)).toEqual(saved);
   });

@@ -157,8 +157,7 @@ export function buildHouse(h: House): Built {
   grass.castShadow = false;
   worldUV(grass, 2.5);
   plot.add(grass);
-  const outerMin = { x: -0.2, z: -0.2 };
-  const outerMax = { x: 12.2, z: 9.2 };
+  const { min: outerMin, max: outerMax } = footprint(h);
   const soil = boxAt({ x: outerMin.x - 0.8, z: outerMin.z - 0.8 }, { x: outerMax.x + 0.8, z: outerMax.z + 0.8 }, -0.35, -0.295, M.soil);
   soil.castShadow = false;
   worldUV(soil, 2);
@@ -470,7 +469,7 @@ function addOpeningFinish(h: House, o: Opening, shell: THREE.Group, finish: THRE
   frame(o.offset + o.width, o.offset + o.width + c, 0.03, o.height + c, M.white, casingT);
   frame(o.offset - c, o.offset + o.width + c, o.height, o.height + c, M.white, casingT);
   const s = doorSwing(h, o);
-  const leafMat = (o.id === "d-entry" ? M.anthracite : M.white).clone();
+  const leafMat = (w.exterior ? M.anthracite : M.white).clone(); // the front door is dark, room doors white
   const leaf = shadowed(new THREE.Mesh(edged(o.width - 0.04, o.height - 0.04, 0.04, 0.005), leafMat));
   const pivot = new THREE.Group();
   pivot.position.copy(P(s.hinge.x, 0, s.hinge.z));

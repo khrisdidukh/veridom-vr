@@ -95,6 +95,8 @@ export type AppState = {
   cutaway: CutawaySpec | null;
   /** Measuring tape: pinch two points. */
   measuring: boolean;
+  /** A plan of the owner's own is loaded, not the demo house. */
+  custom: boolean;
   /** Before/after: the scene shows the plan as it came, not the owner's version. */
   comparing: boolean;
   /** The guided tour is driving the app. */
@@ -143,6 +145,7 @@ export class Store {
       measuring: false,
       touring: false,
       comparing: false,
+      custom: false,
       site: { phase: "off", showFloor: prefs.showFloor, here: "", heading: 0, fine: false, hold: "session", north: "unset" },
       wallOpacity: prefs.wallOpacity,
       xrayRestore: null,
@@ -234,6 +237,17 @@ export class Store {
   setSelectQuiet() {
     this.s.selected = null;
     this.s.view = "main";
+  }
+
+  /** Replaces the house with another plan (or the demo house again) and starts afresh. */
+  loadHouse(house: House, custom: boolean, message = "") {
+    this.original = cloneHouse(house);
+    this.mine = null;
+    Object.assign(this.s, {
+      house: cloneHouse(house), history: [], changes: [], findings: runChecks(house), selected: null, info: null, cutaway: null,
+      comparing: false, measuring: false, view: "main", roomId: house.rooms[0]?.id ?? "", custom, message,
+    });
+    this.emit(true);
   }
 
   /** What the owner changed, compared with the plan as it came. */

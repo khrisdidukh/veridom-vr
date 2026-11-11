@@ -89,6 +89,8 @@ export type House = {
   furniture: FurnitureItem[];
   rooms: Room[];
   pipes: Pipe[];
+  /** Where the plot is, for the sun's path. The demo plot's location is used when absent. */
+  location?: { lat: number; lon: number; name: string };
   /** Distribution board; cables run from here to every point. */
   panel: { wallId: string; offset: number; height: number; side: "left" | "right" };
 };

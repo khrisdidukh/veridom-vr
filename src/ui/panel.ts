@@ -177,6 +177,8 @@ export class Panel {
     ctx.fillStyle = C.dim;
     ctx.font = "26px system-ui, sans-serif";
     ctx.fillText(s.house.name, 40, 100, 450);
+    this.place = s.house.location?.name ?? FRANZEN.name;
+    this.location = s.house.location ?? FRANZEN;
     this.sliders = [];
     const hb = [
       { label: "Model", active: s.mode === "model", onPress: () => store.setMode("model") },
@@ -235,7 +237,7 @@ export class Panel {
       const sun = el > 0 ? `sun ${Math.round(el)}° high from the ${compass(this.sunInfo.azimuth)}` : "sun is down";
       ctx.fillText(aligning ? "Walk slowly. Keep your boundary on." : s.site.north === "unset" ? "North is not set yet — pinch Adjust, then “North is where I look”" : `Facing ${compass(s.site.heading)} · ${sun}`, 436, y + 54, W - 476);
     } else if (s.mode === "walk") {
-      const rooms = s.house.rooms;
+      const rooms = s.house.rooms.slice(0, 6);
       const bw = (W - 80 - 10 * (rooms.length + 1)) / (rooms.length + 2);
       rooms.forEach((r, i) => {
         this.btn({ x: 40 + i * (bw + 10), y, w: bw, h: 60, label: r.name.split(" ")[0]!, active: s.roomId === r.id, onPress: () => this.hooks.enterRoom(r.id) });
@@ -387,7 +389,7 @@ export class Panel {
     add("Layers", 105, s.view === "layers", () => store.set({ view: s.view === "layers" ? "main" : "layers", selected: null }));
     add("Daylight", 125, s.view === "daylight", () => store.set({ view: s.view === "daylight" ? "main" : "daylight", selected: null }));
     add("Measure", 120, s.measuring, () => store.set({ measuring: !s.measuring, message: s.measuring ? "" : "Measuring tape: pinch a first point, then a second." }));
-    if (s.mode !== "site") add(s.touring ? "Stop" : "▶ Tour", 105, s.touring, () => this.hooks.tour());
+    if (s.mode !== "site" && !s.custom) add(s.touring ? "Stop" : "▶ Tour", 105, s.touring, () => this.hooks.tour());
     if (s.mode === "site") add("Floor", 100, s.site.showFloor, () => store.setSite({ showFloor: !s.site.showFloor }));
   }
 

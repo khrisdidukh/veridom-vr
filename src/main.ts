@@ -27,7 +27,10 @@ import { PalmGate, palmFacing, palmNormal } from "./ui/palm";
 import { dayAndHour, sunPosition } from "./env/sun";
 import { formatLength } from "./info/measure";
 import { roomDaylightNote } from "./info/daylight";
-import { MONTHS } from "./env/sun";
+import { FRANZEN, MONTHS } from "./env/sun";
+import { importPlan } from "./plan/import";
+import { ifcToPlan } from "./plan/ifc";
+import { DEMO_HOUSE } from "./house/demo";
 import { SiteXR } from "./site/xr";
 import "./style.css";
 
@@ -73,7 +76,17 @@ pivot.add(inner);
 scene.add(pivot);
 
 let built: Built | null = null;
-const HOUSE_CENTER = plan(6, 0, 4.5);
+/** Outer size of the house in plan metres, and its centre in scene coordinates. */
+const extent = () => footprint(store.s.house);
+const houseCenter = () => {
+  const f = extent();
+  return plan((f.min.x + f.max.x) / 2, 0, (f.min.z + f.max.z) / 2);
+};
+/** A plan point kept at least `margin` inside the outer walls. */
+const insideHouse = (x: number, z: number, margin = 0.7) => {
+  const f = extent();
+  return { x: THREE.MathUtils.clamp(x, f.min.x + margin, f.max.x - margin), z: THREE.MathUtils.clamp(z, f.min.z + margin, f.max.z - margin) };
+};
 let walkTarget = new THREE.Vector2(2.2, 2.0); // plan x, z
 let walkYaw = THREE.MathUtils.degToRad(-35);
 const anchor = new THREE.Vector3(); // where the user stands, in XR space
@@ -349,7 +362,7 @@ function placeWorld() {
     pivot.scale.setScalar(worldScale);
     pivot.position.copy(xr ? modelAnchor : new THREE.Vector3());
     pivot.rotation.set(0, THREE.MathUtils.degToRad(s.modelYaw), 0);
-    inner.position.copy(HOUSE_CENTER).multiplyScalar(-1);
+    inner.position.copy(houseCenter()).multiplyScalar(-1);
   } else if (s.mode === "site") {
     // The house stands where it was pegged; the wearer walks, the house doesn't move.
     const a = siteAlign ?? sitePreview ?? { x: 0, y: 0, z: 0, yaw: 0 };
@@ -369,8 +382,10 @@ function placeWorld() {
   updateSiteGhost();
   pivot.updateMatrixWorld(true);
   // Shadow box around what you look at; lamps scaled with the world (light falls off with distance²).
-  const centre = inner.localToWorld(HOUSE_CENTER.clone());
-  env.focus(centre, 16 * worldScale, pivot.quaternion);
+  const centre = inner.localToWorld(houseCenter());
+  const f = extent();
+  env.roof = { x: (f.max.x - f.min.x) / 2 + 0.1, y: s.house.storeyHeight + 0.25, z: (f.max.z - f.min.z) / 2 + 0.1 };
+  env.focus(centre, Math.max(16, Math.hypot(f.max.x - f.min.x, f.max.z - f.min.z) * 0.75) * worldScale, pivot.quaternion);
   for (const l of env.lamps) l.intensity = 9 * env.darkness * worldScale * worldScale;
   if (!xr) {
     if (s.mode !== "model") {
@@ -486,7 +501,7 @@ function enterSite(): void {
     return;
   }
   const saved = loadSite(storage);
-  if (!saved) return startAlign();
+  if (!saved || (saved.plan !== undefined && saved.plan !== store.s.house.name)) return startAlign();
   siteAlign = { x: saved.x, y: saved.y, z: saved.z, yaw: saved.yaw };
   siteNorthYaw = saved.northOffsetDeg === undefined ? null : northYawOf(siteAlign, saved.northOffsetDeg);
   store.setSite({ phase: "placed", hold: "saved", north: siteNorthYaw === null ? "unset" : "gaze" });
@@ -579,7 +594,7 @@ function confirmSite() {
 function saveSiteSoon() {
   clearTimeout(siteSaveTimer);
   siteSaveTimer = window.setTimeout(() => {
-    if (siteAlign && renderer.xr.isPresenting) saveSite(storage, { ...siteAlign, northOffsetDeg: siteNorthYaw === null ? undefined : northOffsetOf(siteAlign, siteNorthYaw), anchorId: siteXR.anchorId, space: siteXR.spaceType, savedAt: Date.now() });
+    if (siteAlign && renderer.xr.isPresenting) saveSite(storage, { ...siteAlign, plan: store.s.house.name, northOffsetDeg: siteNorthYaw === null ? undefined : northOffsetOf(siteAlign, siteNorthYaw), anchorId: siteXR.anchorId, space: siteXR.spaceType, savedAt: Date.now() });
   }, 300);
 }
 
@@ -802,15 +817,28 @@ function wallSpec(w: Wall, along: number, height: number, towards: { x: number; 
 
 const surfaceSpec = (assembly: "floor" | "roof", x: number, z: number): CutawaySpec => ({ assembly, x, z, y: 0, nx: 0, nz: 1, roomSide: true });
 
+/** Where the floor and roof samples sit by default: in the first room, and in a room at the other end of the house. */
+function dotSpot(assembly: "floor" | "roof"): { x: number; z: number } {
+  const rooms = store.s.house.rooms;
+  const r = assembly === "floor" ? rooms[0] : rooms[Math.min(4, rooms.length - 1)];
+  if (!r) return insideHouse(0, 0);
+  const f = assembly === "floor" ? { x: 0.43, z: 0.24 } : { x: 0.5, z: 0.47 };
+  return insideHouse(r.min.x + (r.max.x - r.min.x) * f.x, r.min.z + (r.max.z - r.min.z) * f.z);
+}
+
 /** Where a build-up opens when it is asked for from the panel: near the viewer, or at its "i" dot. */
 function defaultSpec(assembly: AssemblyId): CutawaySpec {
   const h = store.s.house;
   const ext = assembly === "ext-wall";
   if (assembly === "floor" || assembly === "roof") {
-    if (store.s.mode === "model") return surfaceSpec(assembly, assembly === "floor" ? 3.0 : 8.5, assembly === "floor" ? 1.3 : 6.6);
+    if (store.s.mode === "model") {
+      const at = dotSpot(assembly);
+      return surfaceSpec(assembly, at.x, at.z);
+    }
     const { head, fwd } = viewerAxes();
     const l = inner.worldToLocal(head.clone().addScaledVector(fwd, 1.3));
-    return surfaceSpec(assembly, THREE.MathUtils.clamp(l.x, 0.7, 11.3), THREE.MathUtils.clamp(-l.z, 0.7, 8.3));
+    const at = insideHouse(l.x, -l.z);
+    return surfaceSpec(assembly, at.x, at.z);
   }
   const pick = (w: Wall) => w.exterior === ext;
   const vp = viewerPlan();
@@ -848,9 +876,11 @@ function buildDots() {
   };
   wallDot(h.walls.find((w) => w.exterior));
   wallDot(h.walls.find((w) => !w.exterior));
-  const floor = surfaceSpec("floor", 3.0, 1.3);
+  const fs = dotSpot("floor");
+  const floor = surfaceSpec("floor", fs.x, fs.z);
   add(plan(floor.x, 0.14, floor.z), { info: { kind: "assembly", assembly: "floor" }, cutaway: floor }, () => prog(1) >= 1);
-  const roof = surfaceSpec("roof", 8.5, 6.6);
+  const rs = dotSpot("roof");
+  const roof = surfaceSpec("roof", rs.x, rs.z);
   add(plan(roof.x, H - 0.06, roof.z), { info: { kind: "assembly", assembly: "roof" }, cutaway: roof }, () => prog(2) >= 1, "walk");
   add(plan(roof.x, H + 0.35, roof.z), { info: { kind: "assembly", assembly: "roof" }, cutaway: roof }, () => prog(2) >= 1, "model");
   // Services: one dot per kind, on the real pipe or box.
@@ -1098,7 +1128,10 @@ function activate(hit: Hit): boolean {
   }
   const assembly = hit.surface === "floor" ? "floor" : "roof";
   if (cur?.assembly === assembly && Math.hypot(cur.x - local.x, cur.z + local.z) < 1.2) store.closeCutaway();
-  else store.openCutaway(surfaceSpec(assembly, THREE.MathUtils.clamp(local.x, 0.7, 11.3), THREE.MathUtils.clamp(-local.z, 0.7, 8.3)));
+  else {
+    const at = insideHouse(local.x, -local.z);
+    store.openCutaway(surfaceSpec(assembly, at.x, at.z));
+  }
   return true;
 }
 
@@ -1310,8 +1343,9 @@ function dragTo(ray: THREE.Ray) {
   const at = floorHit(ray);
   const p = placed.get(dragging.id);
   if (!at || !p) return;
-  dragging.x = THREE.MathUtils.clamp(at.x + dragging.grab.x, -1, 13);
-  dragging.z = THREE.MathUtils.clamp(at.y + dragging.grab.y, -1, 10);
+  const f = extent();
+  dragging.x = THREE.MathUtils.clamp(at.x + dragging.grab.x, f.min.x - 1, f.max.x + 1);
+  dragging.z = THREE.MathUtils.clamp(at.y + dragging.grab.y, f.min.z - 1, f.max.z + 1);
   placeGroup(p, dragging.x, dragging.z, p.item.rot);
   refreshShadows();
   const now = performance.now();
@@ -1718,6 +1752,110 @@ window.addEventListener("resize", () => {
   renderer.setSize(window.innerWidth, window.innerHeight);
 });
 
+// ——— Bring your own plan: a JSON file (or an IFC file) through the file picker or ?plan=URL. ———
+const PLAN_KEY = "veridom-vr-plan-v1";
+const planNote = document.getElementById("plan-note")!;
+function showPlanNote(title: string, lines: string[], bad: boolean) {
+  planNote.className = bad ? "plan-note bad" : "plan-note";
+  planNote.replaceChildren();
+  const h = document.createElement("strong");
+  h.textContent = title;
+  planNote.append(h);
+  for (const l of lines.slice(0, 8)) {
+    const p = document.createElement("div");
+    p.textContent = l;
+    planNote.append(p);
+  }
+  if (lines.length > 8) planNote.append(`… and ${lines.length - 8} more`);
+  planNote.style.display = title ? "block" : "none";
+}
+
+/** After the house has been swapped: stand in its first room and drop what belonged to the old one. */
+function afterLoad() {
+  const r = store.s.house.rooms[0];
+  if (r) walkTarget = new THREE.Vector2((r.min.x + r.max.x) / 2, (r.min.z + r.max.z) / 2);
+  env.place = store.s.house.location ? { ...store.s.house.location } : FRANZEN;
+  stopTour();
+  siteGhost.clear();
+  ghostLabels.length = 0;
+  applyState();
+}
+
+/** Reads, checks and shows a plan. `text` is the file's content; IFC files are converted first. */
+function loadPlan(text: string, source: string, remember: boolean): boolean {
+  const ifc = /^\s*ISO-10303-21/.test(text);
+  const converted = ifc ? ifcToPlan(text) : null;
+  if (converted && "errors" in converted) {
+    showPlanNote(`“${source}” could not be read as IFC`, converted.errors, true);
+    return false;
+  }
+  const r = importPlan(converted ? converted.plan : text, QUERY.get("level") ?? undefined);
+  if (!r.ok) {
+    showPlanNote(`“${source}” has ${r.errors.length} problem${r.errors.length > 1 ? "s" : ""} — the demo house stays`, r.errors, true);
+    store.set({ message: `The plan could not be loaded: ${r.errors[0]}` });
+    return false;
+  }
+  const warnings = [...(converted?.warnings ?? []), ...r.warnings];
+  store.loadHouse(r.house, true, `${r.house.name} loaded: ${r.house.walls.length} walls, ${r.house.openings.length} doors and windows, ${r.house.rooms.length} rooms.`);
+  afterLoad();
+  showPlanNote(`Showing: ${r.house.name}`, warnings, false);
+  if (remember) {
+    try {
+      if (text.length < 400_000) storage?.setItem(PLAN_KEY, JSON.stringify({ source, text }));
+    } catch {
+      /* too big to remember; it still shows now */
+    }
+  }
+  return true;
+}
+
+function useDemoPlan() {
+  try {
+    storage?.removeItem(PLAN_KEY);
+  } catch {
+    /* nothing stored */
+  }
+  store.loadHouse(DEMO_HOUSE, false, "Back to the demo house.");
+  afterLoad();
+  showPlanNote("", [], false);
+}
+
+function setupPlanPicker() {
+  const input = document.getElementById("plan-file") as HTMLInputElement;
+  input.addEventListener("change", () => {
+    const file = input.files?.[0];
+    if (!file) return;
+    void file.text().then((text) => loadPlan(text, file.name, true));
+    input.value = "";
+  });
+  document.getElementById("plan-demo")!.addEventListener("click", (e) => {
+    e.preventDefault();
+    useDemoPlan();
+  });
+}
+
+/** At start: ?plan=URL wins, then the plan remembered from last time, else the demo house. */
+async function loadStartPlan() {
+  const url = QUERY.get("plan");
+  if (url === "demo") return useDemoPlan();
+  if (url) {
+    try {
+      const res = await fetch(new URL(url, location.href));
+      if (!res.ok) throw new Error(`the server answered ${res.status}`);
+      loadPlan(await res.text(), url.split("/").pop() || url, false);
+    } catch (e) {
+      showPlanNote("The plan could not be fetched — the demo house stays", [`${url}: ${(e as Error).message}`, "The file must be reachable from this page (same site, or a server that allows cross-origin requests)."], true);
+    }
+    return;
+  }
+  try {
+    const saved = JSON.parse(storage?.getItem(PLAN_KEY) ?? "null") as { source: string; text: string } | null;
+    if (saved?.text) loadPlan(saved.text, saved.source, false);
+  } catch {
+    /* nothing usable stored */
+  }
+}
+
 // Entry buttons: VR, and passthrough (MR) where the device supports it.
 async function addEntryButtons() {
   const bar = document.getElementById("enter")!;
@@ -1752,6 +1890,8 @@ async function boot() {
     device.primaryInputMode = "hand";
     (window as unknown as { __xrDevice: unknown }).__xrDevice = device;
   }
+  setupPlanPicker();
+  await loadStartPlan();
   await addEntryButtons();
 }
 void boot();
@@ -1768,7 +1908,7 @@ void boot();
   },
   /** On-site state for automated checks. */
   site: () => ({ north: store.s.site.north, northOffset: siteAlign && siteNorthYaw !== null ? northOffsetOf(siteAlign, siteNorthYaw) : null, sunDir: env.sun.position.clone().sub(env.sun.target.position).normalize().toArray(), phase: sitePhase(), align: siteAlign, preview: sitePreview, here: store.s.site.here, heading: store.s.site.heading, hold: store.s.site.hold, anchor: siteXR.anchorState, anchorId: siteXR.anchorId, features: { ...siteXR.features }, space: siteXR.spaceType, passthrough }),
-  enterSite, siteGhost, activate, pickHit, wrist, wristMesh,
+  enterSite, siteGhost, activate, pickHit, wrist, wristMesh, loadPlan, useDemoPlan,
   palm: () => { const j = (leftHand as unknown as { joints?: Record<string, THREE.Group> } | null)?.joints; if (!j?.["wrist"]) return null; const n = palmNormal(j["wrist"]!.position, j["index-finger-metacarpal"]!.position, j["pinky-finger-metacarpal"]!.position, "left"); return { n, shown: wristMesh.visible }; },
   /** Tour controls for automated checks: start it, then step it forward by seconds. */
   tour: { start: startTour, stop: stopTour, advance: (seconds: number) => { for (let t = 0; t < seconds; t += 0.25) updateTour(0.25); return tourStep; } },

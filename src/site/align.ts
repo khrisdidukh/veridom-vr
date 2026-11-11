@@ -166,6 +166,8 @@ export type SavedSite = Alignment & {
   northOffsetDeg?: number;
   /** Persistent anchor handle, where the browser gives one. */
   anchorId?: string;
+  /** Name of the plan that was placed; another plan starts a fresh placement. */
+  plan?: string;
   /** Reference space the numbers were taken in. */
   space: string;
   savedAt: number;
@@ -194,6 +196,7 @@ export function loadSite(storage: StorageLike | null | undefined): SavedSite | n
     return {
       x: v.x!, y: v.y!, z: v.z!, yaw: normAngle(v.yaw!),
       northOffsetDeg: typeof v.northOffsetDeg === "number" && Number.isFinite(v.northOffsetDeg) ? v.northOffsetDeg : undefined,
+      plan: typeof v.plan === "string" ? v.plan : undefined,
       anchorId: typeof v.anchorId === "string" ? v.anchorId : undefined,
       space: typeof v.space === "string" ? v.space : "local-floor",
       savedAt: typeof v.savedAt === "number" ? v.savedAt : 0,

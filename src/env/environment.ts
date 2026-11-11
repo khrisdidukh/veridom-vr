@@ -41,6 +41,8 @@ export class Environment {
   shadows = true;
   /** Turn around y that carries the world's −z axis onto true north: the sun is placed relative to it. */
   north = 0;
+  /** Half the roof's size and its height, in metres: no snow falls under it. */
+  roof = { x: 6.3, y: 2.85, z: 4.8 };
   /** Where the plot is, for the sun's path. */
   place: Place = FRANZEN;
   /** Under a ceiling: brighter, warmer fill, as the eye adapts indoors. */
@@ -200,8 +202,8 @@ export class Environment {
     for (let i = 0; i < a.count; i++) {
       let y = a.getY(i) - dt * 0.9;
       if (y < 0) y += 14;
-      // Under the roof line of the 12.4 × 9.4 m house no snow falls.
-      if (y < 2.85 && Math.abs(a.getX(i)) < 6.3 && Math.abs(a.getZ(i)) < 4.8) y = 14;
+      // Under the roof no snow falls.
+      if (y < this.roof.y && Math.abs(a.getX(i)) < this.roof.x && Math.abs(a.getZ(i)) < this.roof.z) y = 14;
       a.setY(i, y);
       a.setX(i, a.getX(i) + Math.sin(t + i) * dt * 0.08);
     }
