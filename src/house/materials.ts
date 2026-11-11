@@ -47,7 +47,8 @@ export const M = {
   get tiles() { return once("tiles", () => pbr("tiles", { color: 0xf3f1ec, roughness: 0.7 })); },
   // Painted plaster: clean white paint, the texture only adds a faint relief.
   get plaster() {
-    return once("plaster", () => new THREE.MeshStandardMaterial({ color: 0xf3f1ec, roughness: 0.92, normalMap: tex("plaster_nor", false), normalScale: new THREE.Vector2(0.25, 0.25) }));
+    // A warm white: the room reads as lit by daylight, not by a grey sky.
+    return once("plaster", () => new THREE.MeshStandardMaterial({ color: 0xf7f2e8, roughness: 0.9, normalMap: tex("plaster_nor", false), normalScale: new THREE.Vector2(0.3, 0.3) }));
   },
   get stucco() { return once("stucco", () => pbr("stucco", { color: 0xf4f1ea, normalScale: 0.6 })); },
   get brick() { return once("brick", () => pbr("brick", { color: 0xe8a27a })); },
@@ -64,7 +65,8 @@ export const M = {
     return once("ceramic", () => new THREE.MeshPhysicalMaterial({ color: 0xfbfbfa, roughness: 0.12, clearcoat: 0.8, clearcoatRoughness: 0.08 }));
   },
   get glass() {
-    return once("glass", () => new THREE.MeshPhysicalMaterial({ color: 0xdfeaf0, roughness: 0.02, metalness: 0, transparent: true, opacity: 0.18, envMapIntensity: 1.5, depthWrite: false }));
+    // A thin mirror: mostly clear, with the sky reflected in it. Cheaper on a headset than real transmission.
+    return once("glass", () => new THREE.MeshStandardMaterial({ color: 0xeaf3f6, roughness: 0.04, metalness: 1, transparent: true, opacity: 0.24, envMapIntensity: 1, depthWrite: false, userData: { glass: true } }));
   },
   get stone() { return once("stone", () => solid(0x3a3b3d, 0.35, 0.05)); },
   get fabricGrey() { return once("fabricGrey", () => solid(0x9b968e, 0.95)); },

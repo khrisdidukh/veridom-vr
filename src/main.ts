@@ -17,6 +17,9 @@ import { clearStretch, nearestWall, outward, wallAt } from "./info/locate";
 import { measure } from "./info/measure";
 import { noteFor, type InfoTarget } from "./info/notes";
 import { alongWall, type Wall } from "./house/model";
+import { contactShadow } from "./house/ao";
+import { TOUR, ramp, stepAt, type TourAction } from "./tour";
+import { XREstimatedLight } from "three/examples/jsm/webxr/XREstimatedLight.js";
 import { alignCornerAt, alignFromTwoPoints, footprint, headingDeg, loadSite, nudge, referenceCorner, rotateAround, roomAt, saveSite, whereAmI, worldToPlan, yawBetween, type Alignment, type WorldPoint } from "./site/align";
 import { SiteXR } from "./site/xr";
 import "./style.css";
@@ -116,6 +119,20 @@ function rebuild() {
   applyState();
 }
 
+/** Glass panes mirror the sky at full strength, whatever the room's ambient level is. */
+function reflectSky() {
+  const sky = scene.environment;
+  scene.traverse((o) => {
+    if (!(o instanceof THREE.Mesh)) return;
+    for (const m of Array.isArray(o.material) ? o.material : [o.material]) {
+      if (m.userData.glass && m instanceof THREE.MeshStandardMaterial && m.envMap !== sky) {
+        m.envMap = sky;
+        m.needsUpdate = true;
+      }
+    }
+  });
+}
+
 /** Opaque materials are compiled to ignore alpha, so switching needs a recompile. */
 function setTransparent(m: THREE.Material, on: boolean) {
   if (m.transparent === on) return;
@@ -172,10 +189,14 @@ function syncFurniture() {
       proxy.position.y = (c?.h ?? 1) / 2;
       proxy.userData = { pick: { type: "furniture", id: it.id } };
       group.add(proxy);
+      // A soft contact shadow, so the piece stands on the floor instead of floating over it.
+      const blob = contactShadow(c?.w ?? 1, c?.d ?? 1);
+      blob.position.y = 0.006;
+      group.add(blob);
       furnitureGroup.add(group);
       const meshes = () => {
         const out: THREE.Mesh[] = [];
-        group.traverse((o) => { if (o instanceof THREE.Mesh && o !== proxy) out.push(o); });
+        group.traverse((o) => { if (o instanceof THREE.Mesh && o !== proxy && o !== blob) out.push(o); });
         return out;
       };
       p = { item: it, group, proxy, meshes };
@@ -227,6 +248,7 @@ function applyState() {
     setTransparent(m, faintFloor);
     m.opacity = faintFloor ? 0.6 : 1;
   }
+  for (const o of built.occlusion) o.visible = solidWalls && (!site || s.site.showFloor);
   // At full size on a headset one shadow pass less keeps the frame rate up.
   env.shadows = !LITE && !(site && renderer.xr.isPresenting);
   built.grass.material = s.light.weather === "snow" ? snowMat : M.grass;
@@ -241,7 +263,10 @@ function applyState() {
   for (const f of s.findings) for (const id of f.elementIds) for (const m of meshesFor(id)) setEmissive(m, COLORS.highlight);
   if (s.selected) for (const m of meshesFor(s.selected.id)) setEmissive(m, COLORS.select);
 
+  // Inside under a ceiling the eye adapts: the room is shown brighter than the plot outside.
+  env.indoors = s.mode === "walk" && built.ceiling.visible;
   env.apply(s.light);
+  reflectSky();
   panel.sunInfo = { elevation: env.sunElevation, azimuth: env.sunAzimuth };
   placeWorld();
   placeMarkers();
@@ -770,6 +795,8 @@ function tapePoint(world: THREE.Vector3) {
     tapeB = null;
     store.set({ message: "First point set. Pinch the second point." });
   } else {
+    // A second pinch on the very same spot is a double pinch, not a measurement.
+    if (local.distanceTo(tapeA) < 0.01) return;
     tapeB = local;
     const r = measure(tapeA, tapeB);
     store.set({ message: `Measured ${r.title}. Pinch again to start a new measurement.` });
@@ -794,7 +821,7 @@ function syncMeasure() {
   tapeLine.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), d.clone().normalize());
   const r = measure(tapeA, tapeB);
   tapeLabel = new Callout({ title: r.title, lines: r.lines }, 0xffd23f);
-  tapeLabel.sizePerMetre = 0.36;
+  tapeLabel.sizePerMetre = 0.6;
   tapeLabel.offset.set(0.03, 0.05);
   scene.add(tapeLabel.group);
 }
@@ -830,6 +857,99 @@ function updateNotes(dt: number) {
     tapeLabel.target.copy(inner.localToWorld(v.copy(tapeA).lerp(tapeB, 0.5)));
     tapeLabel.update(eyePos, eyeQuat);
   }
+}
+
+// ——— Guided tour ———
+let tourT = -1; // seconds since the tour started; −1 when it is not running
+let tourStep = -1;
+let tourRamps: { start: number; a: Extract<TourAction, { seconds: number }> }[] = [];
+let tourLight = { ...store.s.light };
+let tourCaption: THREE.Mesh | null = null;
+const captionEl = document.createElement("div");
+captionEl.className = "caption";
+document.body.appendChild(captionEl);
+
+function showCaption(text: string) {
+  captionEl.textContent = text;
+  captionEl.style.display = text && !renderer.xr.isPresenting ? "block" : "none";
+  if (tourCaption) {
+    tourCaption.removeFromParent();
+    (tourCaption.material as THREE.MeshBasicMaterial).map?.dispose();
+    tourCaption.geometry.dispose();
+    tourCaption = null;
+  }
+  if (!text || !renderer.xr.isPresenting) return;
+  // In the headset the caption hangs in front of the wearer, under the line of sight.
+  tourCaption = textPlane({ title: text }, 0.95);
+  const { head, fwd } = viewerAxes();
+  tourCaption.position.copy(head).addScaledVector(fwd, 1.5).add(new THREE.Vector3(0, -0.42, 0));
+  tourCaption.lookAt(head);
+  scene.add(tourCaption);
+}
+
+/** Stands the viewer at plan (x, z) looking along the compass heading (0 north, 90 east). */
+function standAt(x: number, z: number, heading: number) {
+  walkTarget = new THREE.Vector2(x, z);
+  walkYaw = THREE.MathUtils.degToRad(heading);
+  if (!renderer.xr.isPresenting) {
+    camera.position.set(0, 1.6, 0);
+    controls.target.set(0, 1.585, -0.1);
+  }
+}
+
+function tourDo(a: TourAction) {
+  if (a.do === "mode") {
+    if (a.at) standAt(a.at[0], a.at[1], a.at[2]);
+    store.setMode(a.mode, a.room ? { roomId: a.room } : {});
+  } else if (a.do === "timeline" || a.do === "light") tourRamps.push({ start: tourT, a });
+  else if (a.do === "select") store.select({ type: a.type, id: a.id });
+  else if (a.do === "edit") store.edit(a.kind);
+  else if (a.do === "undo") {
+    if (store.s.changes.length) store.undo();
+    store.select(null);
+  } else if (a.do === "cutaway") store.openCutaway(defaultSpec(a.assembly));
+  else if (a.do === "layer") store.setInfo({ kind: "layer", assembly: a.assembly, layer: a.layer });
+  else if (a.do === "close") {
+    store.closeCutaway();
+    store.select(null);
+  } else if (a.do === "xray") store.setXray(a.on);
+  else stopTour();
+}
+
+function startTour() {
+  tourLight = { ...store.s.light };
+  tourT = 0;
+  tourStep = -1;
+  tourRamps = [];
+  store.set({ touring: true, measuring: false, view: "main" });
+}
+
+function stopTour() {
+  if (tourT < 0) return;
+  tourT = -1;
+  tourRamps = [];
+  showCaption("");
+  store.setLight(tourLight);
+  store.set({ touring: false, message: "Tour over. Now try it yourself: pinch a door, a wall, the timeline." });
+}
+
+function updateTour(dt: number) {
+  if (tourT < 0) return;
+  tourT += dt;
+  const i = stepAt(tourT);
+  while (tourStep < i && tourT >= 0) {
+    const step = TOUR[++tourStep]!;
+    showCaption(step.caption);
+    for (const a of step.actions) if (tourT >= 0) tourDo(a);
+  }
+  if (tourT < 0) return;
+  for (const r of tourRamps) {
+    const v = ramp(r.a.from, r.a.to, r.a.seconds, tourT - r.start);
+    if (r.a.do === "timeline") {
+      if (Math.abs(store.s.timeline - v) > 0.02 || v === r.a.to) store.setTimeline(v);
+    } else if (Math.abs(store.s.light.hour - v) > 0.25 || v === r.a.to) store.setLight({ hour: v });
+  }
+  tourRamps = tourRamps.filter((r) => tourT - r.start < r.a.seconds);
 }
 
 /** What a pinch or click on `hit` does. Returns false when the hit means nothing here. */
@@ -891,6 +1011,7 @@ const panel = new Panel(store, {
   },
   rotateModel: (deg) => store.set({ modelYaw: (store.s.modelYaw + deg) % 360 }),
   addFurniture: (catalogId) => addFurnitureInView(catalogId),
+  tour: () => (tourT < 0 ? startTour() : stopTour()),
   layers: {
     open: (assembly) => {
       if (store.s.cutaway?.assembly === assembly) store.closeCutaway();
@@ -1299,6 +1420,22 @@ renderer.xr.addEventListener("sessionstart", () => {
   if (session) siteXR.start(session);
   for (const p of pointers) if (p.source) siteXR.addInput(p.source);
 });
+// Mixed reality: where the headset estimates the real light, the house is lit by it and sits in the scene.
+const estimated = new XREstimatedLight(renderer);
+estimated.addEventListener("estimationstart", () => {
+  if (!passthrough) return;
+  scene.add(estimated);
+  env.estimated = true;
+  if (estimated.environment) scene.environment = estimated.environment;
+  applyState();
+});
+estimated.addEventListener("estimationend", () => {
+  scene.remove(estimated);
+  env.estimated = false;
+  env.refreshEnvMap();
+  applyState();
+});
+
 renderer.xr.addEventListener("sessionend", () => {
   panelMesh.visible = false;
   panel.canvas.style.display = "";
@@ -1306,6 +1443,7 @@ renderer.xr.addEventListener("sessionend", () => {
   passthrough = false;
   siteXR.end();
   // The placement belongs to the headset session; the saved copy brings it back next time.
+  stopTour();
   siteAlign = sitePreview = siteP1 = null;
   store.s.site = { ...store.s.site, phase: "off", here: "" };
   if (store.s.mode === "site") store.setMode("model");
@@ -1316,6 +1454,7 @@ store.on((_s, houseChanged) => (houseChanged ? rebuild() : applyState()));
 setOnTextureLoad(() => refreshShadows());
 setOnModelLoad(() => {
   refreshShadows();
+  reflectSky();
   applyHighlightsSoon();
 });
 let hlTimer = 0;
@@ -1373,6 +1512,7 @@ renderer.setAnimationLoop(() => {
     updateSiteXR();
   } else controls.update();
   trackSite(performance.now());
+  updateTour(dt);
   updateNotes(dt);
   env.tick(dt);
   const bob = Math.sin(performance.now() / 300) * 0.08;
@@ -1398,7 +1538,7 @@ async function addEntryButtons() {
   };
   if (!xr) return note();
   // Everything beyond local-floor is optional: on site it adds real-surface hit-tests, anchors and large-area tracking.
-  const init: XRSessionInit = { optionalFeatures: ["local-floor", "hand-tracking", "bounded-floor", "unbounded", "hit-test", "anchors"] };
+  const init: XRSessionInit = { optionalFeatures: ["local-floor", "hand-tracking", "bounded-floor", "unbounded", "hit-test", "anchors", "light-estimation"] };
   const start = async (mode: XRSessionMode) => {
     const session = await xr.requestSession(mode, init);
     renderer.xr.setReferenceSpaceType("local-floor");
@@ -1429,7 +1569,7 @@ void boot();
 
 // Expose for automated checks in the browser.
 (window as unknown as { __veridom: unknown }).__veridom = {
-  /** Stand at plan (x, z) looking yawDeg (0 = north, 90 = west). For screenshots and tests. */
+  /** Stand at plan (x, z) looking along compass heading yawDeg (0 = north, 90 = east). For screenshots and tests. */
   view: (x: number, z: number, yawDeg: number, pitch = -0.05) => {
     walkTarget = new THREE.Vector2(x, z);
     walkYaw = THREE.MathUtils.degToRad(yawDeg);
@@ -1439,5 +1579,7 @@ void boot();
   },
   /** On-site state for automated checks. */
   site: () => ({ phase: sitePhase(), align: siteAlign, preview: sitePreview, here: store.s.site.here, heading: store.s.site.heading, hold: store.s.site.hold, anchor: siteXR.anchorState, anchorId: siteXR.anchorId, features: { ...siteXR.features }, space: siteXR.spaceType, passthrough }),
-  enterSite, siteGhost, activate, pickHit, wallAt,
+  enterSite, siteGhost, activate, pickHit,
+  /** Tour controls for automated checks: start it, then step it forward by seconds. */
+  tour: { start: startTour, stop: stopTour, advance: (seconds: number) => { for (let t = 0; t < seconds; t += 0.25) updateTour(0.25); return tourStep; } },
   store, panel, panelMesh, THREE, renderer, pivot, env, camera, controls, placed, inner, pointers };

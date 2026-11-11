@@ -71,7 +71,7 @@ export class Panel {
   onRedraw: () => void = () => {};
   onExport: (text: string) => void = () => {};
 
-  constructor(private store: Store, private hooks: { enterRoom: (id: string) => void; turn: (deg: number) => void; rotateModel: (deg: number) => void; addFurniture: (catalogId: string) => void; site: SiteHooks; layers: { open: (a: AssemblyId) => void } }) {
+  constructor(private store: Store, private hooks: { enterRoom: (id: string) => void; turn: (deg: number) => void; rotateModel: (deg: number) => void; addFurniture: (catalogId: string) => void; site: SiteHooks; tour: () => void; layers: { open: (a: AssemblyId) => void } }) {
     this.canvas = document.createElement("canvas");
     this.canvas.width = W;
     this.canvas.height = H;
@@ -358,6 +358,7 @@ export class Panel {
     };
     add("Layers", 120, s.view === "layers", () => store.set({ view: s.view === "layers" ? "main" : "layers", selected: null }));
     add("Measure", 130, s.measuring, () => store.set({ measuring: !s.measuring, message: s.measuring ? "" : "Measuring tape: pinch a first point, then a second." }));
+    if (s.mode !== "site") add(s.touring ? "Stop tour" : "▶ Tour", 150, s.touring, () => this.hooks.tour());
     if (s.mode === "site") add("Floor", 110, s.site.showFloor, () => store.setSite({ showFloor: !s.site.showFloor }));
   }
 

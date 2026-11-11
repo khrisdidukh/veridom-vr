@@ -11,6 +11,10 @@ A WebXR app for Meta Quest that lets a future home owner check their house plan 
 - **Walk in at full size.** Jump between rooms, or pinch the floor to move. Turn in 45° steps, so no stick or joystick is needed.
 - **Stand in it on your plot.** "On site" puts the house on the real ground at full size in mixed reality. You peg one corner and one wall direction with two pinches, and then you simply walk: through the front door, down the hall, into the bathroom. The house stays where you put it. Doors, furniture, the timeline and the light can all be changed while you stand inside.
 - **Fade the walls.** One slider takes the walls from solid to hidden, in every mode. On site they start at 35 %, so a real obstacle is never hidden behind a virtual wall.
+- **Open the walls.** Pinch a wall, the floor or the ceiling and a sample slides apart into its real build-up at true thickness: plaster, clay block, 16 cm of insulation, render; parquet, heated screed with its pipe loop, insulation, membrane, slab. The wall turns glassy while it is open, so the pipes and cables inside show where they really run. Pinch again to close.
+- **Read the footnotes.** Pinch a layer, a pipe, a door or an orange problem marker and a short note appears in the air with a line to the exact spot: what it is, its size or U-value, why it matters, a guide price, and whether that stage is already built or still free to change. Small "i" dots mark the things worth tapping.
+- **Measure.** Pinch two points; the tape shows the distance in metres.
+- **Take the tour.** "▶ Tour" drives the app through its main ideas in one minute, with a caption per step.
 - **X-ray the walls.** See where pipes and cables run before you drill.
 - **Change things and see the impact.** Move a door, flip its swing, raise a socket, change the worktop height. The app says whether the change is free on paper, small rework, or major rework at the current stage, and lists what would have to be redone.
 - **Catch plan problems.** Automatic checks flag a door that hits the toilet and a light switch hidden behind a door. Both are planted in the demo house.
@@ -45,7 +49,7 @@ Safety on site: use it in daylight, keep the Quest boundary on, walk slowly and 
 ```bash
 npm install
 npm run dev        # http://localhost:5173
-npm test           # logic tests (stages, checks, impact, edits, on-site alignment, wall opacity)
+npm test           # logic tests (stages, checks, impact, edits, on-site alignment, wall opacity, build-ups, footnotes, tape, tour)
 npm run build
 ```
 
@@ -58,12 +62,17 @@ On a computer, add `?emulate=1` to the URL to try the headset flow in a Meta Que
 - `src/edit/` — construction stages, plan checks, change impact rules, edits.
 - `src/env/` — sun position (NOAA approximation for the plot's coordinates), sky, clouds, fog, snow and night lamps.
 - `src/site/` — on-site placement: two-point alignment maths, room under your feet, saved placement (`align.ts`), and the optional WebXR pieces (`xr.ts`).
+- `src/info/` — build-up catalogue with U-values (`catalog.ts`), footnote texts (`notes.ts`), which wall was pointed at (`locate.ts`), the sliding layer sample (`cutaway.ts`), the tape (`measure.ts`).
+- `src/tour.ts` — the one-minute guided tour as data.
+- `src/ui/label.ts` — labels and callouts with leader lines.
 - `src/furnish/` — furniture catalogue, pieces built in code, and CC0 3D models.
 - `src/ui/panel.ts` — the hand-operated panel, drawn to a canvas and shown both in the headset and on desktop.
 
 Textures and 3D models: [Poly Haven](https://polyhaven.com), CC0. Static meshes are merged by material to keep draw calls low on Quest; shadows are redrawn only when something changes.
 
-The impact rules are deliberately simple and give no prices: they say what kind of work a change causes at each stage, not what it costs in euros.
+The picture is kept honest and cheap: real textures, a warm daylight balance that brightens under a ceiling, window glass that mirrors the sky, and ambient occlusion that is drawn rather than computed (soft bands where walls meet floor and ceiling, a soft contact shadow under each piece of furniture). In mixed reality the house is lit by the headset's own light estimate where the browser offers one (`light-estimation`), and by the computed sun otherwise.
+
+The impact rules are deliberately simple and give no prices: they say what kind of work a change causes at each stage, not what it costs in euros. The layer footnotes carry guide prices per m² — rough ranges for comparing layers, set in `src/info/catalog.ts`, to be replaced with the builder's own figures. U-values are computed from the layer thicknesses and conductivities in the same file.
 
 ## License
 

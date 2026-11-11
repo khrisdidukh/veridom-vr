@@ -39,6 +39,10 @@ export class Environment {
   sunAzimuth = 0;
   /** Off in lite mode and at full size on site. */
   shadows = true;
+  /** Under a ceiling: brighter, warmer fill, as the eye adapts indoors. */
+  indoors = false;
+  /** The headset supplies the real light (mixed reality): our own sun and sky light step back. */
+  estimated = false;
   private settings: LightSettings = { hour: 15, month: "sep", weather: "clear" };
 
   constructor(readonly scene: THREE.Scene, private renderer: THREE.WebGLRenderer) {
@@ -115,15 +119,17 @@ export class Environment {
     const day = THREE.MathUtils.smoothstep(sp.elevation, -6, 10);
     this.darkness = 1 - THREE.MathUtils.smoothstep(sp.elevation, -8, 2);
     const warm = 1 - THREE.MathUtils.smoothstep(sp.elevation, 2, 25);
-    this.sun.color.setRGB(1, 0.96 - warm * 0.3, 0.9 - warm * 0.55);
-    this.sun.intensity = 7 * look.sun * THREE.MathUtils.smoothstep(sp.elevation, -1, 6);
+    this.sun.color.setRGB(1, 0.95 - warm * 0.3, 0.86 - warm * 0.55);
+    this.sun.intensity = this.estimated ? 0 : 7 * look.sun * THREE.MathUtils.smoothstep(sp.elevation, -1, 6);
     this.sun.castShadow = this.shadows && look.sun > 0.3;
     this.sun.position.copy(dir).multiplyScalar(40);
     // Warm bounce light softens the blue cast the sky gives interiors.
-    this.hemi.intensity = (0.05 + 1.6 * day) * look.ambient;
-    this.hemi.color.setRGB(1, 0.95, 0.88);
-    this.hemi.groundColor.setRGB(0.55, 0.45, 0.36);
-    this.scene.environmentIntensity = (0.04 + 0.1 * day) * look.ambient;
+    const fill = this.indoors ? 1.25 : 1;
+    this.hemi.intensity = this.estimated ? 0 : (0.05 + 1.6 * day) * look.ambient * fill;
+    this.hemi.color.setRGB(1, 0.94, 0.85);
+    // Light bounced up from a wooden floor is warm; it lifts ceilings and the undersides of things.
+    this.hemi.groundColor.setRGB(0.66, 0.52, 0.4);
+    this.scene.environmentIntensity = this.estimated ? 1 : (0.04 + 0.14 * day) * look.ambient * fill;
 
     if (look.cover >= 0.99 && this.lastCover < 0) {
       this.paintClouds(1);
@@ -144,9 +150,14 @@ export class Environment {
     } else this.scene.fog = null;
     this.snow.visible = settings.weather === "snow";
 
-    this.renderer.toneMappingExposure = 0.55 - 0.15 * day + (look.cover > 0.9 ? 0.25 * day : 0);
-    this.updateEnvMap(`${settings.weather}|${settings.month}|${settings.hour.toFixed(2)}`);
+    this.renderer.toneMappingExposure = (0.55 - 0.15 * day + (look.cover > 0.9 ? 0.25 * day : 0)) * (this.indoors ? 1.3 : 1);
+    if (!this.estimated) this.updateEnvMap(`${settings.weather}|${settings.month}|${settings.hour.toFixed(2)}`);
     for (const l of this.lamps) l.visible = this.darkness > 0.05;
+  }
+
+  /** Puts our own sky back as the environment (after the headset's estimate ends). */
+  refreshEnvMap() {
+    if (this.envRT) this.scene.environment = this.envRT.texture;
   }
 
   private updateEnvMap(key: string) {

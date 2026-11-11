@@ -344,3 +344,33 @@ describe("info state", () => {
     expect(s.s.view).toBe("main");
   });
 });
+
+import { TOUR, TOUR_SECONDS, ramp, stepAt } from "../src/tour";
+describe("guided tour", () => {
+  it("fits in about a minute and runs in order", () => {
+    expect(TOUR_SECONDS).toBeGreaterThanOrEqual(55);
+    expect(TOUR_SECONDS).toBeLessThanOrEqual(65);
+    for (let i = 1; i < TOUR.length; i++) expect(TOUR[i]!.at).toBeGreaterThan(TOUR[i - 1]!.at);
+    expect(TOUR.at(-1)!.actions).toEqual([{ do: "end" }]);
+    for (const s of TOUR) expect(s.caption.length).toBeLessThanOrEqual(90);
+  });
+  it("undoes the change it makes, and names only things that exist", () => {
+    const all = TOUR.flatMap((s) => s.actions);
+    expect(all.filter((a) => a.do === "edit").length).toBe(all.filter((a) => a.do === "undo").length);
+    for (const a of all) {
+      if (a.do === "select") expect(DEMO_HOUSE.openings.some((o) => o.id === a.id)).toBe(true);
+      if (a.do === "mode" && a.room) expect(DEMO_HOUSE.rooms.some((r) => r.id === a.room)).toBe(true);
+      if (a.do === "mode" && a.at) expect(roomAt(DEMO_HOUSE, { x: a.at[0], z: a.at[1] })?.id).toBe(a.room);
+      if (a.do === "layer") expect(ASSEMBLIES[a.assembly].layers.some((l) => l.id === a.layer)).toBe(true);
+    }
+  });
+  it("finds the step for a time and ramps values", () => {
+    expect(stepAt(-1)).toBe(-1);
+    expect(stepAt(0)).toBe(0);
+    expect(stepAt(16)).toBe(2);
+    expect(stepAt(999)).toBe(TOUR.length - 1);
+    expect(ramp(0, 5, 10, 5)).toBe(2.5);
+    expect(ramp(0, 5, 10, 50)).toBe(5);
+    expect(ramp(7, 19, 0, 0)).toBe(19);
+  });
+});

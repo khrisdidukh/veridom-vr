@@ -31,3 +31,10 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #b9d3e6; }
   .panel { width: min(380px, calc(100vw - 32px)); }
   .intro p:not(.note) { display: none; }
 }
+.caption {
+  display: none; position: fixed; top: 18px; left: 464px; right: 16px; margin: 0 auto; width: fit-content;
+  max-width: 760px; padding: 12px 18px; border-radius: 12px;
+  background: rgba(15, 18, 23, 0.9); color: #fff; font: 600 20px system-ui, sans-serif; text-align: center;
+  border-left: 5px solid #29c4d6; pointer-events: none;
+}
+@media (max-width: 1100px) { .caption { left: 16px; top: auto; bottom: 16px; } }

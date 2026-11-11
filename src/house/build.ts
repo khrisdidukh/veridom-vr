@@ -3,6 +3,8 @@ import { doorSwing } from "../edit/checks";
 import { buildCeilingLamp, buildCounter, buildShower, buildSink, buildWc, finishPiece, procUV } from "../furnish/pieces";
 import { M, M as Mat, solid, worldUV } from "./materials";
 import { mergeByMaterial } from "./merge";
+import { occlusionBands, type WallRun } from "./ao";
+import { footprint } from "../site/align";
 import { alongWall, wallById, wallFrame, wallLength, type Fixture, type House, type Opening, type Wall } from "./model";
 
 // Builds the 3D house from plan data. Plan (x, z-north) maps to three.js
@@ -30,6 +32,8 @@ export type Built = {
   ceilingMat: THREE.MeshStandardMaterial;
   /** Pipes, cables and the distribution board; each carries userData.info for the footnotes. */
   services: THREE.Mesh[];
+  /** Soft shading where walls meet the floor; hidden when the walls are see-through. */
+  occlusion: THREE.Mesh[];
 };
 
 const P = (x: number, y: number, z: number) => new THREE.Vector3(x, y, -z);
@@ -166,6 +170,7 @@ export function buildHouse(h: House): Built {
   ghostWalls.name = "ghost-walls";
   const ghostMat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.16, depthWrite: false });
   const skirting = M.white;
+  const runs: WallRun[] = [];
   for (const w of h.walls) {
     const len = wallLength(w);
     const openings = h.openings.filter((o) => o.wallId === w.id).sort((a, b) => a.offset - b.offset);
@@ -192,6 +197,7 @@ export function buildHouse(h: House): Built {
     }
     // Skirting boards on both faces (outside, a dark plinth instead).
     for (const [a, b] of fullRuns) {
+      runs.push({ wall: w, from: a, to: b });
       const inner = wallPiece(w, a, b, 0.03, 0.09, skirting, 0.014, w.thickness / 2 + 0.007);
       if (inner) finish.add(inner);
       const other = wallPiece(w, a, b, w.exterior ? -0.3 : 0.03, w.exterior ? 0.3 : 0.09, w.exterior ? M.anthracite : skirting, 0.014, -(w.thickness / 2 + 0.007));
@@ -204,6 +210,16 @@ export function buildHouse(h: House): Built {
     }
   }
   root.add(ghostWalls);
+  // Drawn-in ambient occlusion along the wall bases; outdoors only the room side of a wall gets it.
+  const fp = footprint(h);
+  const centre = { x: (fp.min.x + fp.max.x) / 2, z: (fp.min.z + fp.max.z) / 2 };
+  const roomSide = (w: Wall): 1 | -1 | 0 => {
+    if (!w.exterior) return 0;
+    const { left } = wallFrame(w);
+    return (centre.x - (w.a.x + w.b.x) / 2) * left.x + (centre.z - (w.a.z + w.b.z) / 2) * left.z >= 0 ? 1 : -1;
+  };
+  const floorAO = occlusionBands(runs, 0.034, 0.42, roomSide);
+  shell.add(floorAO);
 
   const ceiling = new THREE.Group();
   ceiling.name = "ceiling";
@@ -211,6 +227,8 @@ export function buildHouse(h: House): Built {
   const ceil = boxAt(outerMin, outerMax, H, H + 0.22, ceilingMat);
   worldUV(ceil, 1.5);
   ceiling.add(ceil);
+  const fullWalls: WallRun[] = h.walls.map((w) => ({ wall: w, from: 0, to: wallLength(w) }));
+  ceiling.add(occlusionBands(fullWalls, H - 0.004, 0.5, roomSide));
   shell.add(ceiling);
 
   // Openings: pick proxies always exist, so the owner can edit before anything is built.
@@ -343,7 +361,7 @@ export function buildHouse(h: House): Built {
   const mergedWalls: THREE.Mesh[] = [];
   shell.traverse((o) => { if (o instanceof THREE.Mesh && o.material === wallBrick) mergedWalls.push(o); });
 
-  return { root, stageGroups, walls: mergedWalls, wallBrick, wallPlaster, ghostWalls, roughIn, ceiling, pickables, byElement, lampPoints, grass, floors: [slabMesh, floorGroup], floorMats: [slabMat, floorWood, floorTiles], ceilingMat, services };
+  return { root, stageGroups, walls: mergedWalls, wallBrick, wallPlaster, ghostWalls, roughIn, ceiling, pickables, byElement, lampPoints, grass, floors: [slabMesh, floorGroup], floorMats: [slabMat, floorWood, floorTiles], ceilingMat, services, occlusion: [floorAO] };
 }
 
 /** Orients a fixture with its back to the nearest edge of its room. */

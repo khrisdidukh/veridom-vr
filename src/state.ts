@@ -91,6 +91,8 @@ export type AppState = {
   cutaway: CutawaySpec | null;
   /** Measuring tape: pinch two points. */
   measuring: boolean;
+  /** The guided tour is driving the app. */
+  touring: boolean;
   light: LightSettings;
   message: string;
   modelYaw: number;
@@ -128,6 +130,7 @@ export class Store {
       info: null,
       cutaway: null,
       measuring: false,
+      touring: false,
       site: { phase: "off", showFloor: prefs.showFloor, here: "", heading: 0, fine: false, hold: "session" },
       wallOpacity: prefs.wallOpacity,
       xrayRestore: null,
