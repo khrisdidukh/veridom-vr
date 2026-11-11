@@ -551,3 +551,47 @@ describe("before and after", () => {
     expect(s.diff).toEqual([]);
   });
 });
+
+import { PalmGate, palmFacing, palmNormal } from "../src/ui/palm";
+describe("palm-up wrist panel", () => {
+  // Left hand, fingers pointing away (−z), palm up: the thumb side (index) is to the left.
+  const wristJ = { x: 0, y: 1, z: 0 };
+  const indexL = { x: -0.02, y: 1, z: -0.09 };
+  const pinkyL = { x: 0.03, y: 1, z: -0.08 };
+
+  it("finds which way the palm looks", () => {
+    const up = palmNormal(wristJ, indexL, pinkyL, "left");
+    expect(up.y).toBeCloseTo(1);
+    // The same joints mirrored are a right hand, palm up as well.
+    const r = palmNormal(wristJ, { ...indexL, x: 0.02 }, { ...pinkyL, x: -0.03 }, "right");
+    expect(r.y).toBeCloseTo(1);
+    // Turn the left hand over: palm down.
+    expect(palmNormal(wristJ, { ...indexL, x: 0.02 }, { ...pinkyL, x: -0.03 }, "left").y).toBeCloseTo(-1);
+    const f = palmFacing(up, wristJ, { x: 0, y: 1.5, z: 0 });
+    expect(f.up).toBeCloseTo(1);
+    expect(f.toHead).toBeCloseTo(1);
+    expect(palmFacing(up, wristJ, { x: 0, y: 1, z: 2 }).toHead).toBeCloseTo(0);
+  });
+
+  it("shows after a short dwell, keeps through a wobble, hides when the hand turns away", () => {
+    const g = new PalmGate();
+    expect(g.update(0.9, 0.8, false, 0)).toBe(false); // not at once
+    expect(g.update(0.9, 0.8, false, 200)).toBe(false);
+    expect(g.update(0.9, 0.8, false, 300)).toBe(true);
+    expect(g.update(0.5, 0.3, false, 400)).toBe(true); // a tilt that would not have opened it keeps it
+    expect(g.update(0.1, 0.0, false, 500)).toBe(true); // turning away: still there for a moment
+    expect(g.update(0.1, 0.0, false, 950)).toBe(false);
+  });
+
+  it("never appears or disappears during a pinch", () => {
+    const g = new PalmGate();
+    for (let t = 0; t <= 2000; t += 100) expect(g.update(0.95, 0.9, true, t)).toBe(false);
+    // Released: the dwell starts now.
+    expect(g.update(0.95, 0.9, false, 2100)).toBe(false);
+    expect(g.update(0.95, 0.9, false, 2400)).toBe(true);
+    // Pinching while the palm turns away does not drop the panel under the finger.
+    for (let t = 2500; t <= 4000; t += 100) expect(g.update(0, 0, true, t)).toBe(true);
+    expect(g.update(0, 0, false, 4100)).toBe(true);
+    expect(g.update(0, 0, false, 4600)).toBe(false);
+  });
+});

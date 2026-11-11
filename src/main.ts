@@ -22,6 +22,8 @@ import { TOUR, ramp, stepAt, type TourAction } from "./tour";
 import { XREstimatedLight } from "three/examples/jsm/webxr/XREstimatedLight.js";
 import { alignCornerAt, alignFromTwoPoints, fitTwoCorners, footprint, headingDeg, loadSite, northOffsetOf, northYawFromHeading, northYawOf, nudge, planToWorld, referenceCorner, rotateAround, roomAt, saveSite, secondCorner, whereAmI, worldToPlan, yawBetween, type Alignment, type WorldPoint } from "./site/align";
 import { Compass } from "./site/compass";
+import { WristPanel } from "./ui/wrist";
+import { PalmGate, palmFacing, palmNormal } from "./ui/palm";
 import { dayAndHour, sunPosition } from "./env/sun";
 import { formatLength } from "./info/measure";
 import { roomDaylightNote } from "./info/daylight";
@@ -1180,6 +1182,24 @@ panelMesh.visible = false;
 panelMesh.renderOrder = 10;
 scene.add(panelMesh);
 
+// The compact panel that sits over the left palm when it is turned up.
+const wrist = new WristPanel(store, { site: () => enterSite() });
+const wristTexture = new THREE.CanvasTexture(wrist.canvas);
+wristTexture.colorSpace = THREE.SRGBColorSpace;
+wristTexture.anisotropy = 4;
+wrist.onRedraw = () => (wristTexture.needsUpdate = true);
+const WRIST_W = 0.2;
+const wristMesh = new THREE.Mesh(
+  new THREE.PlaneGeometry(WRIST_W, WRIST_W / wrist.aspect),
+  new THREE.MeshBasicMaterial({ map: wristTexture, transparent: true, toneMapped: false, fog: false }),
+);
+wristMesh.visible = false;
+wristMesh.renderOrder = 11;
+scene.add(wristMesh);
+/** Things a ray can press: the palm panel first, then the floating one. */
+type Surface = { mesh: THREE.Mesh; ui: { press: (u: number, v: number) => boolean; dragTo: (u: number) => void; release: () => void; dragging: boolean }; width: number };
+const surfaces: Surface[] = [{ mesh: wristMesh, ui: wrist, width: WRIST_W }, { mesh: panelMesh, ui: panel, width: PANEL_W }];
+
 /** Puts a new piece on the floor about 1.6 m in front of the viewer, facing them. */
 function addFurnitureInView(catalogId: string) {
   const head = new THREE.Vector3();
@@ -1349,6 +1369,9 @@ type Pointer = {
   line: THREE.Line;
   cursor: THREE.Mesh;
   panelUV: THREE.Vector2 | null;
+  /** The panel under the ray, and the one a slider drag started on. */
+  surface: Surface | null;
+  dragSurface: Surface | null;
   floor: THREE.Vector3 | null;
   pick: Hit | null;
   dragging: boolean;
@@ -1379,7 +1402,7 @@ for (let i = 0; i < 2; i++) {
   cursor.visible = false;
   scene.add(cursor);
   scene.add(ctrl);
-  const p: Pointer = { ctrl, line, cursor, panelUV: null, floor: null, pick: null, dragging: false, draggingFurniture: false, source: null, ground: null };
+  const p: Pointer = { ctrl, line, cursor, panelUV: null, surface: null, dragSurface: null, floor: null, pick: null, dragging: false, draggingFurniture: false, source: null, ground: null };
   pointers.push(p);
   ctrl.addEventListener("connected", (e) => {
     p.source = (e as unknown as { data: XRInputSource }).data ?? null;
@@ -1390,9 +1413,10 @@ for (let i = 0; i < 2; i++) {
     p.source = null;
   });
   ctrl.addEventListener("selectstart", () => {
-    if (p.panelUV) {
-      panel.press(p.panelUV.x, p.panelUV.y);
-      p.dragging = panel.dragging;
+    if (p.panelUV && p.surface) {
+      p.surface.ui.press(p.panelUV.x, p.panelUV.y);
+      p.dragging = p.surface.ui.dragging;
+      p.dragSurface = p.dragging ? p.surface : null;
     } else if (sitePicking()) {
       if (!p.ground) return;
       if (sitePhase() === "third") setThirdCorner(p.ground);
@@ -1409,7 +1433,8 @@ for (let i = 0; i < 2; i++) {
     else if (store.s.mode === "walk" && p.floor) teleportTo(p.floor);
   });
   ctrl.addEventListener("selectend", () => {
-    if (p.dragging) panel.release();
+    if (p.dragging) p.dragSurface?.ui.release();
+    p.dragSurface = null;
     if (p.draggingFurniture) endDrag();
     p.dragging = false;
     p.draggingFurniture = false;
@@ -1417,6 +1442,39 @@ for (let i = 0; i < 2; i++) {
   const hand = renderer.xr.getHand(i);
   hand.add(handFactory.createHandModel(hand, "mesh"));
   scene.add(hand);
+  hand.addEventListener("connected", (e) => {
+    const side = (e as unknown as { data?: XRInputSource }).data?.handedness;
+    if (side === "left") leftHand = hand;
+    else if (leftHand === hand) leftHand = null;
+  });
+  hand.addEventListener("disconnected", () => {
+    if (leftHand === hand) leftHand = null;
+  });
+}
+
+// Palm up on the left hand shows the compact panel over the palm.
+let leftHand: THREE.XRHandSpace | null = null;
+const palmGate = new PalmGate();
+function updateWrist() {
+  const j = (leftHand as unknown as { joints?: Record<string, THREE.Group | undefined> } | null)?.joints;
+  const w = j?.["wrist"], i = j?.["index-finger-metacarpal"], k = j?.["pinky-finger-metacarpal"], m = j?.["middle-finger-phalanx-proximal"];
+  const tracked = !!(leftHand?.visible && w && i && k && m && w.visible !== false);
+  if (!tracked) {
+    palmGate.reset();
+    wristMesh.visible = false;
+    return;
+  }
+  const head = viewerAxes().head;
+  const palm = w!.position.clone().lerp(m!.position, 0.6);
+  const n = palmNormal(w!.position, i!.position, k!.position, "left");
+  const f = palmFacing(n, palm, head);
+  const thumb = j?.["thumb-tip"], index = j?.["index-finger-tip"];
+  const pinching = (!!thumb && !!index && thumb.position.distanceTo(index.position) < 0.025) || pointers.some((p) => p.source?.handedness === "left" && (p.dragging || p.draggingFurniture));
+  wristMesh.visible = palmGate.update(f.up, f.toHead, pinching, performance.now());
+  if (!wristMesh.visible) return;
+  // A hand's width above the palm, tilted to face the eyes.
+  wristMesh.position.copy(palm).addScaledVector(new THREE.Vector3(n.x, n.y, n.z), 0.1);
+  wristMesh.lookAt(head);
 }
 
 function teleportTo(worldPoint: THREE.Vector3) {
@@ -1432,6 +1490,7 @@ function updatePointers() {
   let anyFloor = false;
   for (const p of pointers) {
     p.panelUV = null;
+    p.surface = null;
     p.floor = null;
     p.pick = null;
     p.ground = null;
@@ -1446,15 +1505,25 @@ function updatePointers() {
       p.line.scale.z = dist;
       continue;
     }
-    const ph = panelMesh.visible ? raycaster.intersectObject(panelMesh, false)[0] : undefined;
-    if (p.dragging) {
+    // The palm panel belongs to the other hand: the left hand's own ray never presses it.
+    let ph: THREE.Intersection | undefined;
+    for (const sf of surfaces) {
+      if (!sf.mesh.visible || (sf.mesh === wristMesh && p.source?.handedness === "left")) continue;
+      const h = raycaster.intersectObject(sf.mesh, false)[0];
+      if (h && (!ph || h.distance < ph.distance)) {
+        ph = h;
+        p.surface = sf;
+      }
+    }
+    if (p.dragging && p.dragSurface) {
       // Keep dragging a slider even when the ray slides off the panel.
-      tmpPanelInv.copy(panelMesh.matrixWorld).invert();
-      const plane = new THREE.Plane().setFromNormalAndCoplanarPoint(new THREE.Vector3(0, 0, 1).applyQuaternion(panelMesh.quaternion), panelMesh.position);
+      const dm = p.dragSurface.mesh;
+      tmpPanelInv.copy(dm.matrixWorld).invert();
+      const plane = new THREE.Plane().setFromNormalAndCoplanarPoint(new THREE.Vector3(0, 0, 1).applyQuaternion(dm.quaternion), dm.position);
       const hit = raycaster.ray.intersectPlane(plane, new THREE.Vector3());
       if (hit) {
         const local = hit.clone().applyMatrix4(tmpPanelInv);
-        panel.dragTo(local.x / PANEL_W + 0.5);
+        p.dragSurface.ui.dragTo(local.x / p.dragSurface.width + 0.5);
       }
     }
     if (ph?.uv) {
@@ -1551,6 +1620,8 @@ estimated.addEventListener("estimationend", () => {
 
 renderer.xr.addEventListener("sessionend", () => {
   panelMesh.visible = false;
+  wristMesh.visible = false;
+  palmGate.reset();
   panel.canvas.style.display = "";
   env.group.visible = true;
   passthrough = false;
@@ -1624,6 +1695,7 @@ renderer.setAnimationLoop(() => {
         needInitialPlacement = false;
       }
     } else placePanel(false, dt);
+    updateWrist();
     updatePointers();
     updateSiteXR();
   } else controls.update();
@@ -1695,7 +1767,8 @@ void boot();
   },
   /** On-site state for automated checks. */
   site: () => ({ north: store.s.site.north, northOffset: siteAlign && siteNorthYaw !== null ? northOffsetOf(siteAlign, siteNorthYaw) : null, sunDir: env.sun.position.clone().sub(env.sun.target.position).normalize().toArray(), phase: sitePhase(), align: siteAlign, preview: sitePreview, here: store.s.site.here, heading: store.s.site.heading, hold: store.s.site.hold, anchor: siteXR.anchorState, anchorId: siteXR.anchorId, features: { ...siteXR.features }, space: siteXR.spaceType, passthrough }),
-  enterSite, siteGhost, activate, pickHit,
+  enterSite, siteGhost, activate, pickHit, wrist, wristMesh,
+  palm: () => { const j = (leftHand as unknown as { joints?: Record<string, THREE.Group> } | null)?.joints; if (!j?.["wrist"]) return null; const n = palmNormal(j["wrist"]!.position, j["index-finger-metacarpal"]!.position, j["pinky-finger-metacarpal"]!.position, "left"); return { n, shown: wristMesh.visible }; },
   /** Tour controls for automated checks: start it, then step it forward by seconds. */
   tour: { start: startTour, stop: stopTour, advance: (seconds: number) => { for (let t = 0; t < seconds; t += 0.25) updateTour(0.25); return tourStep; } },
   store, panel, panelMesh, THREE, renderer, pivot, env, camera, controls, placed, inner, pointers };
