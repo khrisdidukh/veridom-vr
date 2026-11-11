@@ -10,7 +10,7 @@ import type { Weather } from "../env/environment";
 // as (u, v) in 0..1, so both use the same buttons.
 
 const W = 1200;
-const H = 860;
+const H = 930;
 
 type Button = {
   x: number;
@@ -22,6 +22,20 @@ type Button = {
   active?: boolean;
   tone?: "default" | "primary" | "danger";
   disabled?: boolean;
+  /** Font size in px; 30 by default. */
+  size?: number;
+};
+
+export type SiteHooks = {
+  enter: () => void;
+  realign: () => void;
+  adjust: () => void;
+  confirm: () => void;
+  /** Slide the house: metres to the wearer's right, away from them, and up. */
+  nudge: (right: number, away: number, up: number) => void;
+  rotate: (deg: number) => void;
+  cornerAtFeet: () => void;
+  wallAlongGaze: () => void;
 };
 
 type Slider = { x: number; y: number; w: number; h: number; set: (f: number) => void; done?: () => void };
@@ -55,7 +69,7 @@ export class Panel {
   onRedraw: () => void = () => {};
   onExport: (text: string) => void = () => {};
 
-  constructor(private store: Store, private hooks: { enterRoom: (id: string) => void; turn: (deg: number) => void; rotateModel: (deg: number) => void; addFurniture: (catalogId: string) => void }) {
+  constructor(private store: Store, private hooks: { enterRoom: (id: string) => void; turn: (deg: number) => void; rotateModel: (deg: number) => void; addFurniture: (catalogId: string) => void; site: SiteHooks }) {
     this.canvas = document.createElement("canvas");
     this.canvas.width = W;
     this.canvas.height = H;
@@ -111,10 +125,10 @@ export class Panel {
     ctx.lineWidth = 2;
     ctx.stroke();
     ctx.fillStyle = b.disabled ? "#59616b" : b.active ? "#08262a" : C.text;
-    ctx.font = "600 30px system-ui, sans-serif";
+    ctx.font = `600 ${b.size ?? 30}px system-ui, sans-serif`;
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
-    ctx.fillText(b.label, b.x + b.w / 2, b.y + b.h / 2 + 1, b.w - 16);
+    ctx.fillText(b.label, b.x + b.w / 2, b.y + b.h / 2 + 1, b.w - 14);
     ctx.textAlign = "left";
     ctx.textBaseline = "alphabetic";
   }
@@ -133,19 +147,20 @@ export class Panel {
     ctx.textBaseline = "alphabetic";
     ctx.fillStyle = C.text;
     ctx.font = "700 38px system-ui, sans-serif";
-    ctx.fillText("Veridom · Before you build", 40, 64, 500);
+    ctx.fillText("Veridom · Before you build", 40, 64, 450);
     ctx.fillStyle = C.dim;
     ctx.font = "26px system-ui, sans-serif";
-    ctx.fillText(s.house.name, 40, 100);
+    ctx.fillText(s.house.name, 40, 100, 450);
     this.sliders = [];
     const hb = [
-      { label: "Model", active: s.mode === "model", onPress: () => store.set({ mode: "model" }) },
-      { label: "Walk in", active: s.mode === "walk", onPress: () => store.set({ mode: "walk" }) },
-      { label: "X-ray", active: s.xray, onPress: () => store.set({ xray: !s.xray }) },
+      { label: "Model", active: s.mode === "model", onPress: () => store.setMode("model") },
+      { label: "Walk in", active: s.mode === "walk", onPress: () => store.setMode("walk") },
+      { label: "On site", active: s.mode === "site", onPress: () => this.hooks.site.enter() },
+      { label: "X-ray", active: s.xray, onPress: () => store.setXray(!s.xray) },
       { label: "Light", active: s.view === "light", onPress: () => store.set({ view: s.view === "light" ? "main" : "light" }) },
       { label: "Furnish", active: s.view === "furnish", onPress: () => this.openFurnish() },
     ];
-    hb.forEach((b, i) => this.btn({ x: 560 + i * 122, y: 34, w: 114, h: 64, ...b }));
+    hb.forEach((b, i) => this.btn({ x: 516 + i * 108, y: 34, w: 102, h: 64, size: 26, ...b }));
     this.sliders.push({
       ...this.slider,
       set: (f) => store.setTimeline(f * 5),
@@ -180,7 +195,20 @@ export class Panel {
 
     // Navigation row.
     let y = 270;
-    if (s.mode === "walk") {
+    const aligning = s.mode === "site" && (s.site.phase === "corner" || s.site.phase === "direction");
+    if (s.mode === "site") {
+      this.btn({ x: 40, y, w: 190, h: 60, label: "Re-align", active: aligning, onPress: () => this.hooks.site.realign() });
+      this.btn({ x: 242, y, w: 170, h: 60, label: "Adjust", active: s.site.phase === "adjust", disabled: aligning, onPress: () => (s.site.phase === "adjust" ? this.hooks.site.confirm() : this.hooks.site.adjust()) });
+      ctx.textAlign = "left";
+      ctx.fillStyle = C.text;
+      ctx.font = "600 26px system-ui, sans-serif";
+      ctx.fillText(aligning ? `Placing the house — step ${s.site.phase === "corner" ? 1 : 2} of 2` : s.site.here ? `You are in: ${s.site.here}` : "On your plot, at full size", 436, y + 26, W - 476);
+      ctx.fillStyle = C.dim;
+      ctx.font = "22px system-ui, sans-serif";
+      const el = this.sunInfo.elevation;
+      const sun = el > 0 ? `sun ${Math.round(el)}° high from the ${compass(this.sunInfo.azimuth)}` : "sun is down";
+      ctx.fillText(aligning ? "Walk slowly. Keep your boundary on." : `Facing ${compass(s.site.heading)} · ${sun}`, 436, y + 54, W - 476);
+    } else if (s.mode === "walk") {
       const rooms = s.house.rooms;
       const bw = (W - 80 - 10 * (rooms.length + 1)) / (rooms.length + 2);
       rooms.forEach((r, i) => {
@@ -197,19 +225,42 @@ export class Panel {
       ctx.fillText("Pinch a room's door to look inside, or press Walk in.", 596, y + 38, W - 640);
     }
 
+    // Tools row: wall opacity, and what else is handy in this mode.
+    y = 344;
+    const op = store.wallOpacity;
+    ctx.textAlign = "left";
+    ctx.fillStyle = C.text;
+    ctx.font = "600 26px system-ui, sans-serif";
+    ctx.fillText(`Walls ${Math.round(op * 100)} %`, 40, y + 40, 160);
+    const ws = { x: 220, y, w: 400, h: 60 };
+    ctx.fillStyle = C.line;
+    roundRect(ctx, ws.x, ws.y + 22, ws.w, 16, 8);
+    ctx.fill();
+    ctx.fillStyle = C.accent;
+    roundRect(ctx, ws.x, ws.y + 22, Math.max(16, ws.w * op), 16, 8);
+    ctx.fill();
+    ctx.fillStyle = "#ffffff";
+    ctx.beginPath();
+    ctx.arc(ws.x + ws.w * op, ws.y + 30, 20, 0, Math.PI * 2);
+    ctx.fill();
+    // Not saved on every step of a drag, only when the fingers let go.
+    this.sliders.push({ ...ws, set: (f) => store.setWallOpacity(f, false), done: () => store.setWallOpacity(Math.round(store.wallOpacity * 20) / 20) });
+    this.toolButtons(y);
+
     // Body: selected element or change list.
-    y = 360;
+    y = 425;
     ctx.fillStyle = C.card;
     roundRect(ctx, 40, y, W - 80, 340, 20);
     ctx.fill();
-    if (s.view === "changes") this.drawChanges(y);
+    if (s.mode === "site" && (aligning || s.site.phase === "adjust")) this.drawSite(y);
+    else if (s.view === "changes") this.drawChanges(y);
     else if (s.view === "light") this.drawLight(y);
     else if (s.view === "furnish" && s.selected?.type !== "furniture") this.drawCatalog(y);
     else if (s.selected?.type === "furniture") this.drawFurniture(y);
     else this.drawSelection(y);
 
     // Footer: findings and changes.
-    y = 724;
+    y = 789;
     const f = s.findings;
     ctx.textAlign = "left";
     ctx.font = "600 26px system-ui, sans-serif";
@@ -293,6 +344,71 @@ export class Panel {
     if (c.impact.rework.length) wrap(ctx, "Rework: " + c.impact.rework.join(" · "), 70, y + 292, W - 160, 34);
   }
 
+  /** Buttons to the right of the wall slider. */
+  private toolButtons(y: number) {
+    const { store } = this;
+    const s = store.s;
+    let x = 660;
+    const add = (label: string, w: number, active: boolean, onPress: () => void) => {
+      this.btn({ x, y, w, h: 60, label, active, size: 26, onPress });
+      x += w + 10;
+    };
+    if (s.mode === "site") add("Floor", 110, s.site.showFloor, () => store.setSite({ showFloor: !s.site.showFloor }));
+  }
+
+  /** On-site placement: two pinches on the ground, then fine-tuning. */
+  private drawSite(y: number) {
+    const { ctx, store } = this;
+    const st = store.s.site;
+    const h = this.hooks.site;
+    ctx.textAlign = "left";
+    ctx.fillStyle = C.text;
+    ctx.font = "700 32px system-ui, sans-serif";
+    if (st.phase === "corner") {
+      ctx.fillText("1 · Peg the south-west corner", 70, y + 56);
+      ctx.fillStyle = C.dim;
+      ctx.font = "26px system-ui, sans-serif";
+      wrap(ctx, "Point at the ground where the south-west corner of the house will stand and pinch. The outline of the house follows your hand.", 70, y + 104, W - 160, 36);
+      this.btn({ x: 70, y: y + 236, w: 420, h: 70, label: "Corner at my feet", tone: "primary", onPress: () => h.cornerAtFeet() });
+      ctx.fillStyle = C.dim;
+      ctx.font = "22px system-ui, sans-serif";
+      wrap(ctx, "Easier outdoors: stand on the corner peg and pinch this button.", 516, y + 266, W - 600, 30);
+      return;
+    }
+    if (st.phase === "direction") {
+      ctx.fillText("2 · Sight along the south wall", 70, y + 56);
+      ctx.fillStyle = C.dim;
+      ctx.font = "26px system-ui, sans-serif";
+      wrap(ctx, "Point at the ground further along the south wall, towards the east corner, and pinch. The further the point, the more exact the angle.", 70, y + 104, W - 160, 36);
+      this.btn({ x: 70, y: y + 236, w: 420, h: 70, label: "Wall runs where I look", tone: "primary", onPress: () => h.wallAlongGaze() });
+      this.btn({ x: 506, y: y + 236, w: 240, h: 70, label: "Back", onPress: () => h.realign() });
+      return;
+    }
+    // Fine-tuning.
+    const step = st.fine ? 0.02 : 0.1;
+    const deg = st.fine ? 1 : 5;
+    ctx.fillText("Fine-tune the position", 70, y + 52);
+    ctx.fillStyle = C.dim;
+    ctx.font = "24px system-ui, sans-serif";
+    ctx.fillText(`Steps of ${st.fine ? "2 cm and 1°" : "10 cm and 5°"}, as seen from where you stand.`, 430, y + 52, W - 500);
+    const b = (x: number, yy: number, w: number, label: string, onPress: () => void) => this.btn({ x, y: yy, w, h: 66, label, tone: "primary", size: 28, onPress });
+    const r1 = y + 80;
+    b(70, r1, 170, "◀ Left", () => h.nudge(-step, 0, 0));
+    b(250, r1, 170, "Right ▶", () => h.nudge(step, 0, 0));
+    b(430, r1, 170, "▲ Away", () => h.nudge(0, step, 0));
+    b(610, r1, 170, "▼ Closer", () => h.nudge(0, -step, 0));
+    b(790, r1, 165, "⟲ Turn", () => h.rotate(deg));
+    b(965, r1, 165, "Turn ⟳", () => h.rotate(-deg));
+    const r2 = y + 158;
+    b(70, r2, 170, "Raise", () => h.nudge(0, 0, st.fine ? 0.01 : 0.05));
+    b(250, r2, 170, "Lower", () => h.nudge(0, 0, st.fine ? -0.01 : -0.05));
+    this.btn({ x: 430, y: r2, w: 350, h: 66, label: st.fine ? "Fine steps ✓" : "Fine steps", active: st.fine, size: 28, onPress: () => store.setSite({ fine: !st.fine }) });
+    this.btn({ x: 790, y: r2, w: 340, h: 66, label: "✓ Looks right", active: true, onPress: () => h.confirm() });
+    ctx.fillStyle = C.dim;
+    ctx.font = "24px system-ui, sans-serif";
+    wrap(ctx, "The cyan pole is the south-west corner, the orange arrow the south wall. When they sit on your pegs, pinch “Looks right”.", 70, y + 268, W - 160, 32);
+  }
+
   private openFurnish() {
     const { store } = this;
     if (store.s.view === "furnish") {
@@ -301,7 +417,8 @@ export class Panel {
     }
     // Furniture lives in the finished house.
     store.setTimeline(5);
-    store.set({ view: "furnish", selected: null, xray: false, message: "Pinch a piece to add it, then pinch and drag it into place." });
+    store.setXray(false);
+    store.set({ view: "furnish", selected: null, message: "Pinch a piece to add it, then pinch and drag it into place." });
   }
 
   private drawCatalog(y: number) {

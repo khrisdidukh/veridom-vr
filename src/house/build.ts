@@ -24,6 +24,10 @@ export type Built = {
   /** Warm light points at the ceiling lamps, used at night. */
   lampPoints: THREE.Vector3[];
   grass: THREE.Mesh;
+  /** Slab and room floors, with their own materials so they can be faded or hidden on site. */
+  floors: THREE.Object3D[];
+  floorMats: THREE.MeshStandardMaterial[];
+  ceilingMat: THREE.MeshStandardMaterial;
 };
 
 const P = (x: number, y: number, z: number) => new THREE.Vector3(x, y, -z);
@@ -58,6 +62,36 @@ function wallPiece(w: Wall, from: number, to: number, y0: number, y1: number, ma
   const mid = alongWall(w, (from + to) / 2);
   m.position.copy(P(mid.x + left.x * across, (y0 + y1) / 2, mid.z + left.z * across));
   m.rotation.y = Math.atan2(dir.z, dir.x);
+  return shadowed(m);
+}
+
+/**
+ * Wall masonry: a wall piece without its two end faces. Inside a wall those
+ * faces touch the next piece, and through a see-through wall they would show
+ * as dark seams. The real faces beside an opening are added by jamb().
+ */
+function masonry(w: Wall, from: number, to: number, y0: number, y1: number, material: THREE.Material): THREE.Mesh | null {
+  const m = wallPiece(w, from, to, y0, y1, material);
+  if (!m) return null;
+  const g = m.geometry.toNonIndexed();
+  // BoxGeometry lists its +x and −x faces first: six vertices each.
+  for (const name of Object.keys(g.attributes)) {
+    const a = g.getAttribute(name) as THREE.BufferAttribute;
+    g.setAttribute(name, new THREE.BufferAttribute((a.array as Float32Array).slice(12 * a.itemSize), a.itemSize));
+  }
+  m.geometry = g;
+  return m;
+}
+
+/** The reveal beside an opening: one face across the wall, looking into the opening. */
+function jamb(w: Wall, at: number, y0: number, y1: number, facing: 1 | -1, material: THREE.Material): THREE.Mesh | null {
+  if (y1 - y0 < 0.01) return null;
+  const { dir } = wallFrame(w);
+  const m = new THREE.Mesh(new THREE.PlaneGeometry(w.thickness, y1 - y0), material);
+  const c = alongWall(w, at);
+  m.position.copy(P(c.x, (y0 + y1) / 2, c.z));
+  // A plane looks along +z; turn that to ±the wall direction, (dir.x, 0, −dir.z) in scene axes.
+  m.rotation.y = Math.atan2(facing * dir.x, -facing * dir.z);
   return shadowed(m);
 }
 
@@ -117,7 +151,8 @@ export function buildHouse(h: House): Built {
   }
 
   // Stage 1 — slab.
-  const slabMesh = boxAt(outerMin, outerMax, -h.slabThickness, 0, M.concrete);
+  const slabMat = M.concrete.clone();
+  const slabMesh = boxAt(outerMin, outerMax, -h.slabThickness, 0, slabMat);
   worldUV(slabMesh, 3);
   slab.add(slabMesh);
 
@@ -136,14 +171,16 @@ export function buildHouse(h: House): Built {
     const pieces: (THREE.Mesh | null)[] = [];
     const fullRuns: [number, number][] = [];
     for (const o of openings) {
-      pieces.push(wallPiece(w, cursor, o.offset, 0, H, wallBrick));
+      pieces.push(masonry(w, cursor, o.offset, 0, H, wallBrick));
       fullRuns.push([cursor, o.offset]);
-      pieces.push(wallPiece(w, o.offset, o.offset + o.width, 0, o.sill, wallBrick));
+      pieces.push(masonry(w, o.offset, o.offset + o.width, 0, o.sill, wallBrick));
       if (o.sill > 0) fullRuns.push([o.offset, o.offset + o.width]);
-      pieces.push(wallPiece(w, o.offset, o.offset + o.width, o.sill + o.height, H, wallBrick));
+      pieces.push(masonry(w, o.offset, o.offset + o.width, o.sill + o.height, H, wallBrick));
+      pieces.push(jamb(w, o.offset, o.sill, o.sill + o.height, 1, wallBrick));
+      pieces.push(jamb(w, o.offset + o.width, o.sill, o.sill + o.height, -1, wallBrick));
       cursor = o.offset + o.width;
     }
-    pieces.push(wallPiece(w, cursor, len, 0, H, wallBrick));
+    pieces.push(masonry(w, cursor, len, 0, H, wallBrick));
     fullRuns.push([cursor, len]);
     for (const p of pieces) {
       if (!p) continue;
@@ -168,7 +205,8 @@ export function buildHouse(h: House): Built {
 
   const ceiling = new THREE.Group();
   ceiling.name = "ceiling";
-  const ceil = boxAt(outerMin, outerMax, H, H + 0.22, M.plaster);
+  const ceilingMat = M.plaster.clone();
+  const ceil = boxAt(outerMin, outerMax, H, H + 0.22, ceilingMat);
   worldUV(ceil, 1.5);
   ceiling.add(ceil);
   shell.add(ceiling);
@@ -258,11 +296,16 @@ export function buildHouse(h: House): Built {
   }
 
   // Stage 5 — finishes: floors, sanitary and kitchen, ceiling lamps.
+  const floorGroup = new THREE.Group();
+  floorGroup.name = "floors";
+  finish.add(floorGroup);
+  const floorWood = M.parquet.clone();
+  const floorTiles = M.tiles.clone();
   for (const r of h.rooms) {
-    const floor = boxAt(r.min, r.max, 0, 0.03, r.floor === "wood" ? M.parquet : M.tiles);
+    const floor = boxAt(r.min, r.max, 0, 0.03, r.floor === "wood" ? floorWood : floorTiles);
     floor.castShadow = false;
     worldUV(floor, r.floor === "wood" ? 1.6 : 1.2);
-    finish.add(floor);
+    floorGroup.add(floor);
     const c = P((r.min.x + r.max.x) / 2, 0, (r.min.z + r.max.z) / 2);
     const lamp = buildCeilingLamp();
     lamp.position.set(c.x, H - 0.82, c.z);
@@ -284,14 +327,15 @@ export function buildHouse(h: House): Built {
   }
 
   // Fewer draw calls for the headset: merge everything that is never picked or highlighted on its own.
-  const special = new Set<THREE.Object3D>([grass, ...pickables]);
+  const special = new Set<THREE.Object3D>([grass, slabMesh, ...pickables]);
   for (const list of byElement.values()) for (const m of list) special.add(m);
-  const inCeiling = (m: THREE.Object3D) => { for (let o: THREE.Object3D | null = m; o; o = o.parent) if (o === ceiling) return true; return false; };
-  for (const g of stageGroups) mergeByMaterial(g, (m) => special.has(m) || inCeiling(m));
+  const inKept = (m: THREE.Object3D) => { for (let o: THREE.Object3D | null = m; o; o = o.parent) if (o === ceiling || o === floorGroup) return true; return false; };
+  for (const g of stageGroups) mergeByMaterial(g, (m) => special.has(m) || inKept(m));
+  mergeByMaterial(floorGroup);
   const mergedWalls: THREE.Mesh[] = [];
   shell.traverse((o) => { if (o instanceof THREE.Mesh && o.material === wallBrick) mergedWalls.push(o); });
 
-  return { root, stageGroups, walls: mergedWalls, wallBrick, wallPlaster, ghostWalls, roughIn, ceiling, pickables, byElement, lampPoints, grass };
+  return { root, stageGroups, walls: mergedWalls, wallBrick, wallPlaster, ghostWalls, roughIn, ceiling, pickables, byElement, lampPoints, grass, floors: [slabMesh, floorGroup], floorMats: [slabMat, floorWood, floorTiles], ceilingMat };
 }
 
 /** Orients a fixture with its back to the nearest edge of its room. */
@@ -358,6 +402,7 @@ function addOpeningFinish(h: House, o: Opening, shell: THREE.Group, finish: THRE
     if (o.width > 1.5) put(o.offset + o.width / 2 - 0.035, o.offset + o.width / 2 + 0.035, o.sill, o.sill + o.height);
     const glass = wallPiece(w, o.offset + f, o.offset + o.width - f, o.sill + f, o.sill + o.height - f, M.glass, 0.02);
     if (glass) {
+      glass.renderOrder = 2; // after see-through walls
       glass.castShadow = false;
       glass.receiveShadow = false;
       shell.add(glass);

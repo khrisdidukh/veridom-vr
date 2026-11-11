@@ -37,6 +37,8 @@ export class Environment {
   darkness = 0;
   sunElevation = 0;
   sunAzimuth = 0;
+  /** Off in lite mode and at full size on site. */
+  shadows = true;
   private settings: LightSettings = { hour: 15, month: "sep", weather: "clear" };
 
   constructor(readonly scene: THREE.Scene, private renderer: THREE.WebGLRenderer) {
@@ -115,7 +117,7 @@ export class Environment {
     const warm = 1 - THREE.MathUtils.smoothstep(sp.elevation, 2, 25);
     this.sun.color.setRGB(1, 0.96 - warm * 0.3, 0.9 - warm * 0.55);
     this.sun.intensity = 7 * look.sun * THREE.MathUtils.smoothstep(sp.elevation, -1, 6);
-    this.sun.castShadow = look.sun > 0.3;
+    this.sun.castShadow = this.shadows && look.sun > 0.3;
     this.sun.position.copy(dir).multiplyScalar(40);
     // Warm bounce light softens the blue cast the sky gives interiors.
     this.hemi.intensity = (0.05 + 1.6 * day) * look.ambient;

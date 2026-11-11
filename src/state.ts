@@ -8,7 +8,55 @@ import type { LightSettings } from "./env/environment";
 
 export type Selection = Target | { type: "furniture"; id: string };
 
-export type Mode = "model" | "walk";
+export type Mode = "model" | "walk" | "site";
+
+/** On-site placement flow: peg a corner, sight along a wall, fine-tune, done. */
+export type SitePhase = "off" | "corner" | "direction" | "adjust" | "placed";
+export type SiteState = {
+  phase: SitePhase;
+  /** A faint floor helps judge the layout on real ground. */
+  showFloor: boolean;
+  /** Where the wearer stands: a room name or "Outside, …". */
+  here: string;
+  /** Compass heading the wearer faces, degrees from north. */
+  heading: number;
+  /** Small nudge steps (2 cm, 1°) instead of 10 cm, 5°. */
+  fine: boolean;
+  /** How the house is held in place: "anchor", "saved" or "session". */
+  hold: string;
+};
+
+/** Wall opacity per kind of mode: solid at home, see-through on site so a real obstacle is never hidden. */
+export type WallOpacity = { home: number; site: number };
+export const DEFAULT_WALL_OPACITY: WallOpacity = { home: 1, site: 0.35 };
+export const XRAY_OPACITY = 0.25;
+export const PREFS_KEY = "veridom-vr-prefs-v1";
+type StorageLike = Pick<Storage, "getItem" | "setItem">;
+
+const clamp01 = (v: unknown, fallback: number) => (typeof v === "number" && Number.isFinite(v) ? Math.max(0, Math.min(1, v)) : fallback);
+
+export function loadPrefs(storage: StorageLike | null | undefined): { wallOpacity: WallOpacity; showFloor: boolean } {
+  const out = { wallOpacity: { ...DEFAULT_WALL_OPACITY }, showFloor: true };
+  try {
+    const v = JSON.parse(storage?.getItem(PREFS_KEY) ?? "null") as { wallOpacity?: Partial<WallOpacity>; showFloor?: unknown } | null;
+    if (v) {
+      out.wallOpacity.home = clamp01(v.wallOpacity?.home, out.wallOpacity.home);
+      out.wallOpacity.site = clamp01(v.wallOpacity?.site, out.wallOpacity.site);
+      if (typeof v.showFloor === "boolean") out.showFloor = v.showFloor;
+    }
+  } catch {
+    /* unreadable prefs: defaults */
+  }
+  return out;
+}
+
+const browserStorage = (): Storage | null => {
+  try {
+    return typeof localStorage === "undefined" ? null : localStorage;
+  } catch {
+    return null;
+  }
+};
 
 export type AppState = {
   house: House;
@@ -24,6 +72,10 @@ export type AppState = {
   light: LightSettings;
   message: string;
   modelYaw: number;
+  site: SiteState;
+  wallOpacity: WallOpacity;
+  /** Wall opacity to go back to when X-ray is switched off. */
+  xrayRestore: number | null;
 };
 
 type Listener = (s: AppState, houseChanged: boolean) => void;
@@ -34,8 +86,9 @@ export class Store {
   s: AppState;
   private listeners: Listener[] = [];
 
-  constructor() {
+  constructor(private storage: StorageLike | null = browserStorage()) {
     const house = cloneHouse(DEMO_HOUSE);
+    const prefs = loadPrefs(storage);
     this.s = {
       house,
       history: [],
@@ -50,6 +103,9 @@ export class Store {
       light: { hour: 15, month: "sep", weather: "clear" },
       message: "Pinch the timeline to build the house. Pinch a door, window or socket to change it.",
       modelYaw: 0,
+      site: { phase: "off", showFloor: prefs.showFloor, here: "", heading: 0, fine: false, hold: "session" },
+      wallOpacity: prefs.wallOpacity,
+      xrayRestore: null,
     };
   }
 
@@ -69,6 +125,75 @@ export class Store {
   setTimeline(t: number) {
     this.s.timeline = Math.max(0, Math.min(5, t));
     this.emit(false);
+  }
+
+  setSite(patch: Partial<SiteState>) {
+    this.s.site = { ...this.s.site, ...patch };
+    if (patch.showFloor !== undefined) this.persistPrefs();
+    this.emit(false);
+  }
+
+  private get opacityKey(): keyof WallOpacity {
+    return this.s.mode === "site" ? "site" : "home";
+  }
+
+  /** Wall opacity in the current mode, 0 (hidden) … 1 (solid). */
+  get wallOpacity(): number {
+    return this.s.wallOpacity[this.opacityKey];
+  }
+
+  setWallOpacity(v: number, persist = true) {
+    this.s.wallOpacity = { ...this.s.wallOpacity, [this.opacityKey]: Math.max(0, Math.min(1, v)) };
+    // Moving the slider by hand is a new choice: X-ray no longer has a value to restore.
+    if (this.s.xray) this.s.xrayRestore = null;
+    if (persist) this.persistPrefs();
+    this.emit(false);
+  }
+
+  /** X-ray shows pipes and cables and drops the walls to 25 %; switching it off puts the walls back. */
+  setXray(on: boolean) {
+    if (on === this.s.xray) return;
+    const k = this.opacityKey;
+    if (on) {
+      this.s.xrayRestore = this.s.wallOpacity[k];
+      this.s.wallOpacity = { ...this.s.wallOpacity, [k]: Math.min(this.s.wallOpacity[k], XRAY_OPACITY) };
+    } else if (this.s.xrayRestore !== null) {
+      this.s.wallOpacity = { ...this.s.wallOpacity, [k]: this.s.xrayRestore };
+      this.s.xrayRestore = null;
+    }
+    this.s.xray = on;
+    this.emit(false);
+  }
+
+  /** Changing mode ends X-ray, so each mode keeps its own wall opacity. */
+  setMode(mode: Mode, patch: Partial<AppState> = {}) {
+    if (mode !== this.s.mode) this.setXrayQuiet(false);
+    Object.assign(this.s, patch, { mode });
+    this.emit(false);
+  }
+
+  private setXrayQuiet(on: boolean) {
+    const listeners = this.listeners;
+    this.listeners = [];
+    this.setXray(on);
+    this.listeners = listeners;
+  }
+
+  private persistPrefs() {
+    try {
+      const w = { ...this.s.wallOpacity };
+      // While X-ray is on, remember the opacity it will go back to.
+      if (this.s.xray && this.s.xrayRestore !== null) w[this.opacityKey] = this.s.xrayRestore;
+      this.storage?.setItem(PREFS_KEY, JSON.stringify({ wallOpacity: w, showFloor: this.s.site.showFloor }));
+    } catch {
+      /* storage can be unavailable; the session still works */
+    }
+  }
+
+  /** Clears the selection without telling listeners (the caller emits next). */
+  setSelectQuiet() {
+    this.s.selected = null;
+    this.s.view = "main";
   }
 
   select(t: Selection | null) {
@@ -156,7 +281,7 @@ export class Store {
 
   private persist() {
     try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(this.s.changes));
+      this.storage?.setItem(STORAGE_KEY, JSON.stringify(this.s.changes));
     } catch {
       /* storage can be unavailable; the session still works */
     }
