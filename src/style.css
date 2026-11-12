@@ -71,3 +71,16 @@ body.touch.walking .intro { display: none; }
 .caption span { display: block; font-weight: 500; font-size: 17px; color: #d5dbe3; margin-top: 2px; }
 .only-tour { display: none; }
 body.touring .only-tour { display: inline-block; }
+.levels { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.levels button { font: 600 13px system-ui, sans-serif; padding: 6px 10px; border-radius: 8px; border: 1px solid #2c333d; background: #1d2229; color: #eef1f4; cursor: pointer; }
+.levels button.on { background: #29c4d6; color: #06262a; border-color: #29c4d6; }
+.welcome { position: fixed; inset: 0; z-index: 20; display: flex; align-items: center; justify-content: center; background: rgba(12, 15, 19, 0.55); backdrop-filter: blur(6px); padding: 20px; }
+.welcome .card { width: min(520px, 100%); background: #13161b; color: #eef1f4; border-radius: 20px; padding: 34px 36px 28px; box-shadow: 0 20px 60px rgba(0, 0, 0, .45); }
+.welcome .eyebrow { margin: 0 0 8px; font: 600 12px system-ui, sans-serif; letter-spacing: .14em; text-transform: uppercase; color: #29c4d6; }
+.welcome h2 { margin: 0 0 8px; font: 700 32px/1.15 system-ui, sans-serif; }
+.welcome .address { margin: 0 0 6px; font-size: 16px; color: #c7cfd8; }
+.welcome .actions { display: flex; gap: 10px; margin-top: 22px; }
+.welcome .actions button, .welcome .actions a { font: 600 16px system-ui, sans-serif; padding: 12px 22px; border-radius: 12px; border: 0; cursor: pointer; text-decoration: none; }
+.welcome .actions button { background: #29c4d6; color: #06262a; }
+.welcome .actions a.ghost { background: #1d2229; color: #eef1f4; border: 1px solid #2c333d; }
+.welcome .contact { margin: 16px 0 0; font-size: 14px; color: #9aa4b1; }

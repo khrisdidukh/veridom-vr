@@ -30,6 +30,7 @@ import { formatLength } from "./info/measure";
 import { roomDaylightNote } from "./info/daylight";
 import { FRANZEN, MONTHS } from "./env/sun";
 import { importPlan } from "./plan/import";
+import { contactHref, projectFrom } from "./plan/project";
 import { dressing, nextStyle, styleById } from "./style/styles";
 import { buildDressing, disposeDressing } from "./style/build";
 import { applyLook } from "./house/materials";
@@ -98,6 +99,9 @@ const anchor = new THREE.Vector3(); // where the user stands, in XR space
 const modelAnchor = new THREE.Vector3(0.1, 0.8, -0.75);
 let worldScale = 1;
 let passthrough = false;
+let planLevels: { id: string; name: string }[] = [];
+let planLevel = "";
+let lastPlan: { text: string; source: string } | null = null;
 
 // ——— On site: the house at 1:1 on the real plot. ———
 // ?local=1 keeps the local-floor space even where the unbounded one is offered.
@@ -1216,6 +1220,14 @@ const panel = new Panel(store, {
   tour: () => (tourT < 0 ? startTour() : stopTour()),
   mute: () => setMuted(!music.muted),
   dollhouse: () => dollhouse(),
+  plan: {
+    levels: () => planLevels,
+    level: () => planLevel,
+    nextLevel: () => {
+      const i = planLevels.findIndex((l) => l.id === planLevel);
+      if (planLevels.length > 1) setLevel(planLevels[(i + 1) % planLevels.length]!.id);
+    },
+  },
   layers: {
     open: (assembly) => {
       if (store.s.cutaway?.assembly === assembly) store.closeCutaway();
@@ -1975,14 +1987,14 @@ function afterLoad() {
 }
 
 /** Reads, checks and shows a plan. `text` is the file's content; IFC files are converted first. */
-function loadPlan(text: string, source: string, remember: boolean): boolean {
+function loadPlan(text: string, source: string, remember: boolean, level: string | undefined = QUERY.get("level") ?? undefined): boolean {
   const ifc = /^\s*ISO-10303-21/.test(text);
   const converted = ifc ? ifcToPlan(text) : null;
   if (converted && "errors" in converted) {
     showPlanNote(`“${source}” could not be read as IFC`, converted.errors, true);
     return false;
   }
-  const r = importPlan(converted ? converted.plan : text, QUERY.get("level") ?? undefined);
+  const r = importPlan(converted ? converted.plan : text, level);
   if (!r.ok) {
     showPlanNote(`“${source}” has ${r.errors.length} problem${r.errors.length > 1 ? "s" : ""} — the demo house stays`, r.errors, true);
     store.set({ message: `The plan could not be loaded: ${r.errors[0]}` });
@@ -1992,6 +2004,11 @@ function loadPlan(text: string, source: string, remember: boolean): boolean {
   store.loadHouse(r.house, true, `${r.house.name} loaded: ${r.house.walls.length} walls, ${r.house.openings.length} doors and windows, ${r.house.rooms.length} rooms.`);
   afterLoad();
   showPlanNote(`Showing: ${r.house.name}`, warnings, false);
+  planLevels = r.levels;
+  planLevel = r.level;
+  lastPlan = { text, source };
+  showLevels();
+  showWelcome(r.project);
   if (remember) {
     try {
       if (text.length < 400_000) storage?.setItem(PLAN_KEY, JSON.stringify({ source, text }));
@@ -2002,6 +2019,50 @@ function loadPlan(text: string, source: string, remember: boolean): boolean {
   return true;
 }
 
+// Storeys of the loaded plan, and the welcome card.
+function setLevel(id: string) {
+  if (lastPlan && id !== planLevel) loadPlan(lastPlan.text, lastPlan.source, false, id);
+}
+/** A button per storey, on the start page and on the welcome card; hidden for a single-storey plan. */
+function showLevels() {
+  for (const el of document.querySelectorAll<HTMLElement>(".levels")) {
+    el.replaceChildren();
+    el.style.display = planLevels.length > 1 ? "flex" : "none";
+    if (planLevels.length < 2) continue;
+    for (const l of planLevels) {
+      const b = document.createElement("button");
+      b.textContent = l.name;
+      b.className = l.id === planLevel ? "on" : "";
+      b.addEventListener("click", () => setLevel(l.id));
+      el.append(b);
+    }
+  }
+  panel.draw();
+}
+/** The welcome card: project name, address and contact, when the plan or the page address gives any. */
+function showWelcome(block: unknown) {
+  const p = projectFrom(QUERY, block);
+  const card = document.getElementById("welcome")!;
+  if (!p || renderer.xr.isPresenting) return;
+  const set = (id: string, text: string | undefined) => {
+    const el = document.getElementById(id)!;
+    el.textContent = text ?? "";
+    el.style.display = text ? "" : "none";
+  };
+  set("welcome-name", p.name ?? store.s.house.name);
+  set("welcome-address", p.address);
+  set("welcome-contact", [p.contactName, p.phone, p.email].filter(Boolean).join(" · ") || undefined);
+  const link = document.getElementById("welcome-call") as HTMLAnchorElement;
+  const href = contactHref(p);
+  link.style.display = href ? "" : "none";
+  if (href) link.href = href;
+  link.textContent = p.email ? "Contact by e-mail" : "Call";
+  card.style.display = "flex";
+}
+document.getElementById("welcome-start")!.addEventListener("click", () => {
+  document.getElementById("welcome")!.style.display = "none";
+});
+
 function useDemoPlan() {
   try {
     storage?.removeItem(PLAN_KEY);
@@ -2011,6 +2072,9 @@ function useDemoPlan() {
   store.loadHouse(DEMO_HOUSE, false, "Back to the demo house.");
   afterLoad();
   showPlanNote("", [], false);
+  planLevels = [];
+  lastPlan = null;
+  showLevels();
 }
 
 function setupPlanPicker() {
@@ -2030,7 +2094,10 @@ function setupPlanPicker() {
 /** At start: ?plan=URL wins, then the plan remembered from last time, else the demo house. */
 async function loadStartPlan() {
   const url = QUERY.get("plan");
-  if (url === "demo") return useDemoPlan();
+  if (url === "demo") {
+    useDemoPlan();
+    return showWelcome(undefined);
+  }
   if (url) {
     try {
       const res = await fetch(new URL(url, location.href));
@@ -2041,12 +2108,15 @@ async function loadStartPlan() {
     }
     return;
   }
+  let loaded = false;
   try {
     const saved = JSON.parse(storage?.getItem(PLAN_KEY) ?? "null") as { source: string; text: string } | null;
-    if (saved?.text) loadPlan(saved.text, saved.source, false);
+    if (saved?.text) loaded = loadPlan(saved.text, saved.source, false);
   } catch {
     /* nothing usable stored */
   }
+  // The demo house can carry a project too, from the page address alone.
+  if (!loaded) showWelcome(undefined);
 }
 
 // Entry buttons: VR, and passthrough (MR) where the device supports it.

@@ -130,3 +130,63 @@ describe("sample plan", () => {
     expect(r.ok && checks(r.house)).toEqual([]);
   });
 });
+
+import { areaWarnings, checkAreas, netArea } from "../src/plan/check";
+import { contactHref, projectFrom } from "../src/plan/project";
+import { DEMO_HOUSE as DEMO } from "../src/house/demo";
+
+describe("check the plan", () => {
+  it("measures the floor inside the walls", () => {
+    const r = importPlan(sample);
+    if (!r.ok) throw new Error("sample");
+    // Living room 5 × 4 m between centre lines: less 19 cm (outer) and 6 cm (partition), 19 cm and 7.5 cm.
+    expect(netArea(r.house, r.house.rooms[0]!)).toBeCloseTo(4.75 * 3.735, 2);
+    expect(netArea(DEMO, DEMO.rooms[0]!)).toBeCloseTo((7 - 0.19 - 0.075) * (5.5 - 0.19 - 0.06), 2);
+  });
+
+  it("agrees with the sizes stated in the sample plan", () => {
+    const r = importPlan(sample);
+    if (!r.ok) throw new Error("sample");
+    const rows = checkAreas(r.house);
+    expect(rows.every((x) => x.stated !== null && x.ok)).toBe(true);
+    for (const x of rows) expect(Math.abs(x.diffPct!)).toBeLessThan(1.5);
+    expect(areaWarnings(r.house)).toEqual([]);
+    expect(checkAreas(DEMO).every((x) => x.stated === null && x.ok)).toBe(true);
+  });
+
+  it("flags a room that is more than 5 % off, and refuses a nonsense size", () => {
+    const p = JSON.parse(sample);
+    p.levels[0].rooms[1].statedArea = 16; // kitchen is 14.0 m² as drawn
+    const r = importPlan(p);
+    if (!r.ok) throw new Error("sample");
+    const k = checkAreas(r.house)[1]!;
+    expect(k.ok).toBe(false);
+    expect(k.diffPct).toBeCloseTo(-12.4, 0);
+    expect(r.warnings).toEqual(["Kitchen: 14.0 m² as drawn, 16.0 m² stated (−12 %) — check its walls."]);
+    p.levels[0].rooms[1].statedArea = "big";
+    const bad = importPlan(p);
+    expect(!bad.ok && bad.errors[0]).toMatch(/statedArea: must be the room's floor area in m²/);
+  });
+});
+
+describe("project card", () => {
+  const params = (o: Record<string, string>) => ({ get: (k: string) => o[k] ?? null });
+  it("takes the project from the plan and lets the address override it", () => {
+    const block = { name: "Haus am Hang", address: "Musterweg 1, 1010 Wien", contact: { name: "A. Builder", phone: "+43 1 234 56 78", email: "office@example.com" } };
+    expect(projectFrom(params({}), block)).toEqual({ name: "Haus am Hang", address: "Musterweg 1, 1010 Wien", contactName: "A. Builder", phone: "+43 1 234 56 78", email: "office@example.com" });
+    expect(projectFrom(params({ project: "Other name", email: "me@example.org" }), block)).toMatchObject({ name: "Other name", email: "me@example.org", address: "Musterweg 1, 1010 Wien" });
+    expect(projectFrom(params({}), undefined)).toBeNull();
+    expect(projectFrom(params({}), { name: "   " })).toBeNull();
+  });
+  it("drops what is not an e-mail or a phone number, and trims long text", () => {
+    const p = projectFrom(params({ project: "x".repeat(300), email: "javascript:alert(1)", phone: "call me" }), null)!;
+    expect(p.name).toHaveLength(120);
+    expect(p.email).toBeUndefined();
+    expect(p.phone).toBeUndefined();
+  });
+  it("builds the contact link", () => {
+    expect(contactHref({ name: "Haus & Hof", email: "a@b.co" })).toBe("mailto:a@b.co?subject=Haus%20%26%20Hof");
+    expect(contactHref({ phone: "+43 (1) 234-56" })).toBe("tel:+43123456");
+    expect(contactHref({ name: "x" })).toBeNull();
+  });
+});

@@ -13,8 +13,22 @@
       <p>Your future house at full size. Slide the timeline from the empty plot to the finished rooms, move a door or a socket, and see what the change costs at each stage of the build.</p>
       <div id="enter"></div>
       <p class="plan"><label for="plan-file">Open your own plan</label> (JSON or IFC) · <a href="#" id="plan-demo">demo house</a> · <a href="plans/sample-house.json" download>sample file</a><input id="plan-file" type="file" accept=".json,.ifc,application/json" hidden /></p>
+      <div class="levels" style="display:none"></div>
       <div id="plan-note" class="plan-note" style="display:none"></div>
     </header>
+    <div id="welcome" class="welcome" style="display:none">
+      <div class="card">
+        <p class="eyebrow">Your future home</p>
+        <h2 id="welcome-name"></h2>
+        <p id="welcome-address" class="address"></p>
+        <div class="levels" style="display:none"></div>
+        <div class="actions">
+          <button id="welcome-start">Start</button>
+          <a id="welcome-call" class="ghost" href="#">Contact</a>
+        </div>
+        <p id="welcome-contact" class="contact"></p>
+      </div>
+    </div>
     <nav id="quick" class="quick">
       <button id="btn-walk" title="Walk through the rooms">Walk</button>
       <button id="btn-doll" title="The whole home from above">Dollhouse</button>

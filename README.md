@@ -19,6 +19,9 @@ A WebXR app for Meta Quest that lets a future home owner check their house plan 
 - **Compare before and after.** "Original" flips the scene between the plan as it came and your version. What you changed — doors, fittings, furniture — is violet in both.
 - **Use your palm.** Turn the left hand palm up and a small panel sits over it: modes, the wall slider, undo, before/after, X-ray.
 - **Bring your own plan.** Open a JSON file (or, experimentally, an IFC file) and walk through your own house instead of the demo.
+- **Walk it on a laptop or phone.** No headset needed: **Walk**, then W A S D or the arrow keys and the mouse (drag to look, or M to lock the mouse; Esc frees it). On a phone a thumb stick walks and dragging looks. Walls stop you; doors let you through. **Dollhouse** shows the whole home from above.
+- **Switch the interior style.** Modern, Scandinavian or Warm luxury with one click: floor, paint, kitchen, fabrics, wood and metal change, and a rug, pictures and a floor lamp are placed to fit the plan.
+- **Show it to a client.** A welcome card with the project name, address and a Contact button; a tour that names each room with its size and one useful fact, with soft generated music, ending in the dollhouse view.
 - **X-ray the walls.** See where pipes and cables run before you drill.
 - **Change things and see the impact.** Move a door, flip its swing, raise a socket, change the worktop height. The app says whether the change is free on paper, small rework, or major rework at the current stage, and lists what would have to be redone.
 - **Catch plan problems.** Automatic checks flag a door that hits the toilet and a light switch hidden behind a door. Both are planted in the demo house.
@@ -78,22 +81,80 @@ The format, version 1 — see [`public/plans/sample-house.json`](public/plans/sa
 | coordinates | `[x, z]`: x runs east, z runs north (as drawn; `site.northOffsetDeg` says how far real north lies clockwise of the plan's north). The plan may sit anywhere; it is moved to the origin. |
 | `walls[]` | `id`, `from`, `to` (centre line), `thickness` (default 0.38 outer / 0.12 inner), `exterior`. If no wall has `exterior`, the walls on the edge of the plan are taken as outer walls. |
 | `openings[]` | `type` `door` or `window`, `wall` (a wall id), `offset` from the wall's `from` end to the opening's near edge, `width`, `height` (default 2.1 / 1.4), `sill` (default 0 / 0.9). Doors: `hinge` `start` or `end`, `swing` `left` or `right` of the wall's direction. Glazed doors are windows with `sill` 0. |
-| `rooms[]` | `min` and `max` corners of a rectangle, or a `polygon` (replaced by the rectangle around it); `floor` `wood` or `tiles`; `wet`. Without rooms the whole floor is one room. |
+| `rooms[]` | `min` and `max` corners of a rectangle, or a `polygon` (replaced by the rectangle around it); `floor` `wood` or `tiles`; `wet`; `statedArea` (m² written on the drawing, for **Check plan**). Without rooms the whole floor is one room. |
 | optional | `points[]` (sockets, switches: `type`, `wall`, `offset`, `height`, `side`, `room`), `fixtures[]` (`type` wc, sink, shower, counter; `min`, `max`), `furniture[]` (`item` from the catalogue, `at`, `rot`), `pipes[]` (`type` cold, hot, drain; `points` as `[x, height, z]`), `board` (`wall`, `offset`). |
-| `levels[]` | One level is shown at a time: the first, or the one named by `&level=<id>`. A file with `walls` at the top level is read as a single level. |
+| `project` | Optional: `name`, `address`, `contact` (`name`, `phone`, `email`) for the welcome card. |
+| `levels[]` | One level is shown at a time: the first, the one picked with the level buttons, or the one named by `&level=<id>`. A file with `walls` at the top level is read as a single level. |
 
 A file with mistakes is not loaded; the page lists what is wrong and where, for example `levels[0].openings[6] ("Kitchen window"): is 1.40 m wide at offset 8.50 m, but wall "south" is only 9.00 m long`. The demo house stays until the file is right.
 
 **IFC (experimental).** An `.ifc` file (IFC2x3 or IFC4, STEP text) can be opened the same way. The reader takes straight walls (from their axis line or an extruded rectangular or polyline profile), doors and windows (from their placement and overall size), storeys, length units and `Pset_WallCommon.IsExternal`. It does not read rooms, slabs, roofs, stairs, curved or sloped walls; the floor becomes one room. It has been tested on a hand-written file only — check door and window positions after loading, and prefer JSON when you can.
 
-Limits for any imported plan: rooms are rectangles, one storey at a time, the slab and ceiling are the rectangle around the outer walls, the layer build-ups are the standard ones from `src/info/catalog.ts`, and the guided tour is for the demo house only.
+Limits for any imported plan: rooms are rectangles, one storey at a time, the slab and ceiling are the rectangle around the outer walls, and the layer build-ups are the standard ones from `src/info/catalog.ts`.
+
+## A start screen for a client
+
+Give the page a project and it opens with a welcome card: the project name, the address, **Start**, and a **Contact** button that writes an e-mail or dials. Nothing is shown when nothing is set.
+
+- In the plan file: `"project": { "name": "Haus am Hang", "address": "Musterweg 1, 1010 Wien", "contact": { "name": "A. Builder", "phone": "+43 1 234 56 78", "email": "office@example.com" } }`
+- Or in the page address: `?project=Haus%20am%20Hang&address=Musterweg%201&contact=A.%20Builder&phone=%2B43%201%20234%2056%2078&email=office%40example.com` (these win over the file; they also work with the demo house).
+
+A plan with more than one storey gets level buttons on the start page, on the welcome card and on the panel (Model view). **▶ Tour** then walks the client through: in at the front door, room by room, each with its name, size and one fact (a plan problem, or its hours of sun), a wall opened into its layers, the sun from morning to evening, and up to the dollhouse view. The music is made in the browser; **♪ Music** switches it off.
+
+## Plan from a photo or a PDF
+
+A floor plan on paper can be turned into the JSON format with Claude (or another assistant that reads images). Attach the photo or PDF and use this prompt:
+
+```text
+Turn the attached floor plan into a JSON file in the "veridom-plan" format, version 1.
+
+Format (all lengths in metres, coordinates [x, z] with x to the right and z up the page,
+origin at the bottom-left outer corner of the building):
+{
+  "format": "veridom-plan", "version": 1, "name": "<title of the plan>", "units": "m",
+  "site": { "northOffsetDeg": <degrees from "up the page" clockwise to the north arrow, 0 if none> },
+  "levels": [{
+    "id": "<short id>", "name": "<storey name>", "height": <room height>,
+    "walls": [{ "id": "...", "from": [x, z], "to": [x, z], "thickness": <m>, "exterior": true|false }],
+    "openings": [{ "id": "...", "type": "door"|"window", "name": "...", "wall": "<wall id>",
+                   "offset": <m from the wall's "from" end to the near edge>, "width": <m>,
+                   "height": <m>, "sill": <m above floor>, "hinge": "start"|"end", "swing": "left"|"right" }],
+    "rooms": [{ "id": "...", "name": "...", "min": [x, z], "max": [x, z],
+                "floor": "wood"|"tiles", "wet": true|false, "statedArea": <m² printed on the plan> }]
+  }]
+}
+
+Rules:
+- Walls are straight centre lines. Split a wall where its thickness changes, not at every junction.
+  Outer walls "exterior": true. Every opening must fit inside its wall: offset + width ≤ wall length.
+- Rooms are rectangles from wall centre line to wall centre line. For an L-shaped room use the
+  rectangle around it and say so.
+- Take every dimension that is printed on the plan. Where none is printed, scale from the printed
+  ones and mark the value as estimated in your notes.
+- Room height: use the printed value; if there is none, use 2.6 and say so.
+- Copy each room's printed floor area into "statedArea". Do not compute it yourself.
+- Doors: "hinge" is the end of the opening the hinge is at, seen along the wall from "from" to
+  "to"; "swing" is the side the leaf opens to, left or right of that direction. Glazed doors to
+  outside are windows with "sill": 0.
+- One level per storey.
+
+Before the JSON, give me:
+1. A list of your assumptions and of every value you estimated rather than read.
+2. A check table: for each room, the area of your rectangle less half the wall thicknesses,
+   next to the area printed on the plan, with the difference in per cent. Fix anything more
+   than 5 % apart before you answer, or tell me why you could not.
+3. Anything on the plan you could not read.
+Then the JSON in one code block, and nothing after it.
+```
+
+Save the answer as a `.json` file and open it with **Open your own plan**. The app repeats the check: mistakes in the file are listed with their place, and **Check plan** (Model view on the panel) compares every room's area as drawn with its `statedArea` and flags rooms more than 5 % apart. A plan traced from a photo is a sketch to walk through, not a survey; confirm dimensions with the architect's drawings before deciding anything from it.
 
 ## Run it
 
 ```bash
 npm install
 npm run dev        # http://localhost:5173
-npm test           # logic tests (stages, checks, impact, edits, on-site alignment, north, wall opacity, build-ups, footnotes, tape, tour, daylight, before/after, palm gate, plan import, IFC)
+npm test           # logic tests (stages, checks, impact, edits, on-site alignment, north, wall opacity, build-ups, footnotes, tape, tour, daylight, before/after, palm gate, plan import, IFC, walking and collision, styles, tour route, area check, project card)
 npm run build
 ```
 
@@ -112,7 +173,10 @@ On a computer, add `?emulate=1` to the URL to try the headset flow in a Meta Que
 - `src/plan/` — plan import: the JSON format with its checks (`import.ts`) and the IFC subset (`ifc.ts`).
 - `src/ui/wrist.ts`, `src/ui/palm.ts` — the palm panel and the palm-up gate.
 - `src/site/compass.ts` — device compass, where there is one.
-- `src/tour.ts` — the one-minute guided tour as data.
+- `src/tour.ts`, `src/tour-music.ts` — the guided tour, written for the loaded house, and its generated music.
+- `src/walk/collide.ts` — walking on a screen: walls stop, doors pass.
+- `src/style/` — the three interior looks and their dressing pieces.
+- `src/plan/check.ts`, `src/plan/project.ts` — room-size check and the welcome card's data.
 - `src/ui/label.ts` — labels and callouts with leader lines.
 - `src/furnish/` — furniture catalogue, pieces built in code, and CC0 3D models.
 - `src/ui/panel.ts` — the hand-operated panel, drawn to a canvas and shown both in the headset and on desktop.

@@ -9,6 +9,7 @@ import { APPROX_NOTE, assemblySummary, noteFor } from "../info/notes";
 import { MONTH_NAMES, sunHours } from "../info/daylight";
 import { FRANZEN, type Place } from "../env/sun";
 import { nextStyle, styleById } from "../style/styles";
+import { AREA_TOLERANCE, checkAreas } from "../plan/check";
 
 // One control panel drawn on a canvas. In the headset it is a texture on a
 // floating plane; on a desktop the same canvas sits in the page. Hits arrive
@@ -96,7 +97,7 @@ export class Panel {
   onRedraw: () => void = () => {};
   onExport: (text: string) => void = () => {};
 
-  constructor(private store: Store, private hooks: { enterRoom: (id: string) => void; turn: (deg: number) => void; rotateModel: (deg: number) => void; addFurniture: (catalogId: string) => void; site: SiteHooks; tour: () => void; mute: () => void; dollhouse: () => void; layers: { open: (a: AssemblyId) => void } }) {
+  constructor(private store: Store, private hooks: { enterRoom: (id: string) => void; turn: (deg: number) => void; rotateModel: (deg: number) => void; addFurniture: (catalogId: string) => void; site: SiteHooks; tour: () => void; mute: () => void; dollhouse: () => void; plan: { levels: () => { id: string; name: string }[]; level: () => string; nextLevel: () => void }; layers: { open: (a: AssemblyId) => void } }) {
     this.canvas = document.createElement("canvas");
     this.canvas.width = W;
     this.canvas.height = H;
@@ -250,11 +251,11 @@ export class Panel {
       this.btn({ x: 40, y, w: 170, h: 60, label: "⟲ Rotate", onPress: () => this.hooks.rotateModel(45) });
       this.btn({ x: 220, y, w: 170, h: 60, label: "Rotate ⟳", onPress: () => this.hooks.rotateModel(-45) });
       this.btn({ x: 400, y, w: 180, h: 60, label: "Dollhouse", onPress: () => this.hooks.dollhouse() });
-      this.navExtras(600, y);
+      const free = this.navExtras(600, y);
       ctx.fillStyle = C.dim;
       ctx.font = "24px system-ui, sans-serif";
       ctx.textAlign = "left";
-      ctx.fillText("Pinch a room's door to look inside, or press Walk in.", 596, y + 38, W - 640);
+      if (free < 900) ctx.fillText(free > 600 ? "Or press Walk in." : "Pinch a room's door to look inside, or press Walk in.", free, y + 38, W - 40 - free);
     }
 
     // Tools row: wall opacity, and what else is handy in this mode.
@@ -289,6 +290,7 @@ export class Panel {
     else if (s.view === "light") this.drawLight(y);
     else if (s.view === "layers" && !s.selected) this.drawLayers(y);
     else if (s.view === "daylight" && !s.selected) this.drawDaylight(y);
+    else if (s.view === "plancheck" && !s.selected) this.drawPlanCheck(y);
     else if (s.view === "furnish" && s.selected?.type !== "furniture") this.drawCatalog(y);
     else if (s.selected?.type === "furniture") this.drawFurniture(y);
     else this.drawSelection(y);
@@ -382,8 +384,52 @@ export class Panel {
   }
 
   /** Further buttons in the model row (level switch, plan check); filled in by later features. Returns the next free x. */
-  private navExtras(x: number, _y: number): number {
+  private navExtras(x: number, y: number): number {
+    const { store } = this;
+    const s = store.s;
+    const levels = this.hooks.plan.levels();
+    if (levels.length > 1) {
+      const now = levels.find((l) => l.id === this.hooks.plan.level())?.name ?? "";
+      this.btn({ x, y, w: 300, h: 60, label: `Level: ${now}  ▸`, size: 26, onPress: () => this.hooks.plan.nextLevel() });
+      x += 310;
+    }
+    if (s.custom || s.house.rooms.some((r) => r.statedArea !== undefined)) {
+      const off = checkAreas(s.house).filter((r) => !r.ok).length;
+      this.btn({ x, y, w: 230, h: 60, label: off ? `Check plan (${off} ⚠)` : "Check plan", size: 26, active: s.view === "plancheck", onPress: () => store.set({ view: s.view === "plancheck" ? "main" : "plancheck", selected: null }) });
+      x += 240;
+    }
     return x;
+  }
+
+  /** "Check the plan": each room's area as drawn against the area written on the drawing. */
+  private drawPlanCheck(y: number) {
+    const { ctx, store } = this;
+    const rows = checkAreas(store.s.house).slice(0, 7);
+    const any = rows.some((r) => r.stated !== null);
+    ctx.textAlign = "left";
+    ctx.fillStyle = C.text;
+    ctx.font = "600 28px system-ui, sans-serif";
+    ctx.fillText("Check the plan: room sizes", 70, y + 44);
+    ctx.fillStyle = C.dim;
+    ctx.font = "22px system-ui, sans-serif";
+    ctx.textAlign = "right";
+    ctx.fillText(any ? `as drawn against as stated · more than ${AREA_TOLERANCE} % apart is flagged` : "add \"statedArea\" to the rooms in the file to compare", W - 70, y + 44, 620);
+    const cols = [70, 520, 720, 900];
+    ctx.textAlign = "left";
+    ctx.font = "600 21px system-ui, sans-serif";
+    ["Room", "As drawn", "Stated", "Difference"].forEach((t, i) => ctx.fillText(t, cols[i]!, y + 82));
+    const rh = Math.min(34, 228 / Math.max(1, rows.length));
+    rows.forEach((r, i) => {
+      const yy = y + 110 + i * rh;
+      ctx.font = "24px system-ui, sans-serif";
+      ctx.fillStyle = C.text;
+      ctx.fillText(r.name, cols[0]!, yy, 430);
+      ctx.fillText(`${r.computed.toFixed(1)} m²`, cols[1]!, yy);
+      ctx.fillStyle = r.stated === null ? C.dim : C.text;
+      ctx.fillText(r.stated === null ? "—" : `${r.stated.toFixed(1)} m²`, cols[2]!, yy);
+      ctx.fillStyle = r.diffPct === null ? C.dim : r.ok ? C.plan : C.warn;
+      ctx.fillText(r.diffPct === null ? "—" : `${r.diffPct > 0 ? "+" : "−"}${Math.abs(r.diffPct).toFixed(1)} %  ${r.ok ? "✓" : "⚠ check the walls"}`, cols[3]!, yy, 240);
+    });
   }
 
   /** Buttons to the right of the wall slider. */

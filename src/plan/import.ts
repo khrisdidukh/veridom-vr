@@ -1,4 +1,5 @@
 import { CATALOG } from "../furnish/catalog";
+import { areaWarnings } from "./check";
 import type { Fixture, FurnitureItem, House, Opening, Pipe, Room, Wall, WallPoint } from "../house/model";
 
 // Reads a house plan from the documented JSON format (see README, "Bring your
@@ -6,7 +7,7 @@ import type { Fixture, FurnitureItem, House, Opening, Pipe, Room, Wall, WallPoin
 // what is wrong, so the file can be fixed without reading this code.
 
 export type PlanResult =
-  | { ok: true; house: House; warnings: string[]; levels: { id: string; name: string }[]; level: string }
+  | { ok: true; house: House; warnings: string[]; levels: { id: string; name: string }[]; level: string; project: unknown }
   | { ok: false; errors: string[] };
 
 type Obj = Record<string, unknown>;
@@ -41,7 +42,7 @@ export function importPlan(input: string | unknown, levelId?: string): PlanResul
   if (li < 0) return { ok: false, errors: [`Level "${levelId}" is not in the file. It has: ${levels.map((l) => l.id).join(", ")}`] };
   const L = rawLevels[li]!;
   const at = Array.isArray(root.levels) ? `levels[${li}].` : "";
-  if (levels.length > 1) warnings.push(`The file has ${levels.length} levels; showing "${levels[li]!.name}". Add &level=<id> to the address for another (${levels.map((l) => l.id).join(", ")}).`);
+  if (levels.length > 1) warnings.push(`The file has ${levels.length} levels; showing "${levels[li]!.name}". Switch with the level buttons, or add &level=<id> to the address (${levels.map((l) => l.id).join(", ")}).`);
 
   const height = L.height === undefined ? 2.6 : num(L.height) ? L.height * k : NaN;
   if (!(height >= 2 && height <= 6)) errors.push(`${at}height: room height must be between 2 and 6 m, got ${JSON.stringify(L.height)}`);
@@ -161,7 +162,8 @@ export function importPlan(input: string | unknown, levelId?: string): PlanResul
     min = shift(min);
     max = shift(max);
     if (max.x - min.x < 0.5 || max.z - min.z < 0.5) return void errors.push(`${where}: "max" must be at least 0.5 m beyond "min" in both directions`);
-    if (id) rooms.push({ id, name: name || `Room ${rooms.length + 1}`, min, max, floor: r.floor === "tiles" ? "tiles" : "wood", wet: r.wet === true });
+    if (r.statedArea !== undefined && !(num(r.statedArea) && r.statedArea > 0)) return void errors.push(`${where}.statedArea: must be the room's floor area in m², got ${JSON.stringify(r.statedArea)}`);
+    if (id) rooms.push({ id, name: name || `Room ${rooms.length + 1}`, min, max, floor: r.floor === "tiles" ? "tiles" : "wood", wet: r.wet === true, ...(num(r.statedArea) ? { statedArea: r.statedArea } : {}) });
   });
   if (!rooms.length && !errors.length) {
     rooms.push({ id: "whole-floor", name: "Whole floor", min: { x: 0, z: 0 }, max: { x: maxX - minX, z: maxZ - minZ }, floor: "wood", wet: false });
@@ -229,5 +231,6 @@ export function importPlan(input: string | unknown, levelId?: string): PlanResul
     walls, openings, points, fixtures, furniture, rooms, pipes, panel,
     ...(lat !== undefined ? { location: { lat, lon: num(site.lon) ? site.lon : 15, name: typeof site.name === "string" ? site.name : "Your plot" } } : {}),
   };
-  return { ok: true, house, warnings, levels, level: levels[li]!.id };
+  warnings.push(...areaWarnings(house));
+  return { ok: true, house, warnings, levels, level: levels[li]!.id, project: root.project };
 }

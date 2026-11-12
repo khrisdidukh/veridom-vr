@@ -64,6 +64,8 @@ export type Room = {
   max: Vec2;
   floor: "wood" | "tiles";
   wet: boolean;
+  /** Floor area written on the drawing, in m²: compared with the area as drawn. */
+  statedArea?: number;
 };
 
 export type Pipe = {
