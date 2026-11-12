@@ -5,8 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Veridom · Before you build</title>
     <meta name="description" content="Walk through your future house before it is built. Scrub the construction timeline and see what a change would cost at each stage." />
-    <script type="module" crossorigin src="/veridom-vr/assets/index-nGtY2Yz-.js"></script>
-    <link rel="stylesheet" crossorigin href="/veridom-vr/assets/index-CYNm7ZgH.css">
+    <script type="module" crossorigin src="/veridom-vr/assets/index-DtrZzIV4.js"></script>
+    <link rel="stylesheet" crossorigin href="/veridom-vr/assets/index-CMbc612G.css">
   </head>
   <body>
     <div id="app"></div>
@@ -17,5 +17,13 @@
       <p class="plan"><label for="plan-file">Open your own plan</label> (JSON or IFC) · <a href="#" id="plan-demo">demo house</a> · <a href="plans/sample-house.json" download>sample file</a><input id="plan-file" type="file" accept=".json,.ifc,application/json" hidden /></p>
       <div id="plan-note" class="plan-note" style="display:none"></div>
     </header>
+    <nav id="quick" class="quick">
+      <button id="btn-walk" title="Walk through the rooms">Walk</button>
+      <button id="btn-doll" title="The whole home from above">Dollhouse</button>
+      <button id="btn-panel" class="only-touch" title="Show or hide the panel">☰ Panel</button>
+    </nav>
+    <div id="walk-bar" class="walk-bar"><span class="no-touch"><b>W A S D</b> or arrows to walk · drag to look · click a door or wall to change it · </span><span class="only-touch">Left thumb walks · drag to look · tap to select</span><button id="btn-look" class="no-touch">Mouse look (M)</button><span class="lock-hint"> · <b>Esc</b> frees the mouse</span></div>
+    <div id="stick" class="stick"><i></i></div>
+    <div id="crosshair" class="crosshair"></div>
   </body>
 </html>
