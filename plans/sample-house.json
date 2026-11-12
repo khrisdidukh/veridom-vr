@@ -33,11 +33,11 @@
         { "id": "win-bath-n", "type": "window", "name": "Bathroom window", "wall": "north", "offset": 2.7, "width": 0.8, "height": 0.8, "sill": 1.4 }
       ],
       "rooms": [
-        { "id": "living", "name": "Living room", "min": [0, 0], "max": [5, 4], "floor": "wood" },
-        { "id": "kitchen", "name": "Kitchen", "min": [5, 0], "max": [9, 4], "floor": "tiles" },
-        { "id": "bedroom", "name": "Bedroom", "min": [0, 4], "max": [4.5, 7], "floor": "wood" },
-        { "id": "bath", "name": "Bathroom", "min": [4.5, 4], "max": [7, 7], "floor": "tiles", "wet": true },
-        { "id": "hall", "name": "Hall", "min": [7, 4], "max": [9, 7], "floor": "tiles" }
+        { "id": "living", "name": "Living room", "min": [0, 0], "max": [5, 4], "floor": "wood", "statedArea": 17.7 },
+        { "id": "kitchen", "name": "Kitchen", "min": [5, 0], "max": [9, 4], "floor": "tiles", "statedArea": 14.0 },
+        { "id": "bedroom", "name": "Bedroom", "min": [0, 4], "max": [4.5, 7], "floor": "wood", "statedArea": 11.6 },
+        { "id": "bath", "name": "Bathroom", "min": [4.5, 4], "max": [7, 7], "floor": "tiles", "statedArea": 6.5, "wet": true },
+        { "id": "hall", "name": "Hall", "min": [7, 4], "max": [9, 7], "floor": "tiles", "statedArea": 4.8 }
       ],
       "points": [
         { "id": "sw-living", "type": "switch", "name": "Living room light switch", "wall": "kitchen-wall", "offset": 1.2, "side": "right", "room": "living" },
