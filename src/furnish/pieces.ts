@@ -96,7 +96,7 @@ function bed(): THREE.Group {
   const W = 1.8, D = 2.1;
   g.add(at(box(W, 0.26, D - 0.1, M.oak), 0, 0.2, 0.05));
   g.add(at(rbox(W - 0.08, 0.22, D - 0.2, 0.05, M.linen), 0, 0.44, 0.06));
-  const duvet = at(rbox(W - 0.02, 0.1, 1.4, 0.05, new THREE.MeshStandardMaterial({ color: 0xc9ced3, roughness: 0.95 })), 0, 0.58, 0.32);
+  const duvet = at(rbox(W - 0.02, 0.1, 1.4, 0.05, M.duvet), 0, 0.58, 0.32);
   g.add(duvet);
   g.add(at(rbox(W - 0.02, 0.03, 0.4, 0.015, M.fabricSand), 0, 0.64, 0.7));
   for (const sx of [-1, 1]) {
@@ -105,6 +105,12 @@ function bed(): THREE.Group {
     g.add(p);
   }
   g.add(at(rbox(W + 0.1, 0.85, 0.1, 0.03, M.fabricGrey), 0, 0.425, -D / 2 + 0.05));
+  // A made bed: two accent cushions in front of the pillows.
+  for (const sx of [-1, 1]) {
+    const c = at(rbox(0.4, 0.1, 0.36, 0.05, M.accent), sx * 0.3, 0.68, -0.42);
+    c.rotation.x = -0.5;
+    g.add(c);
+  }
   return g;
 }
 
@@ -197,7 +203,7 @@ export function buildFurniture(catalogId: string): THREE.Group {
 
 export function buildCounter(w: number, d: number, h: number): THREE.Group {
   const g = new THREE.Group();
-  const front = new THREE.MeshStandardMaterial({ color: 0xe8e4dc, roughness: 0.55 });
+  const front = M.front;
   g.add(at(box(w, 0.1, d - 0.06, M.anthracite), 0, 0.05, -0.03));
   g.add(at(box(w, h - 0.14, d - 0.03, front), 0, 0.1 + (h - 0.14) / 2, -0.015));
   const n = Math.max(1, Math.round(w / 0.6));

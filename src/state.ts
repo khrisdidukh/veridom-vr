@@ -1,5 +1,6 @@
 import { applyEdit, type Change } from "./edit/changes";
 import { runChecks, type Finding } from "./edit/checks";
+import { STYLES, styleById, type StyleId } from "./style/styles";
 import { diffHouses, diffSummary, type Diff } from "./edit/diff";
 import type { ChangeKind, Target } from "./edit/impact";
 import { DEMO_HOUSE } from "./house/demo";
@@ -56,11 +57,12 @@ type StorageLike = Pick<Storage, "getItem" | "setItem">;
 
 const clamp01 = (v: unknown, fallback: number) => (typeof v === "number" && Number.isFinite(v) ? Math.max(0, Math.min(1, v)) : fallback);
 
-export function loadPrefs(storage: StorageLike | null | undefined): { wallOpacity: WallOpacity; showFloor: boolean } {
-  const out = { wallOpacity: { ...DEFAULT_WALL_OPACITY }, showFloor: true };
+export function loadPrefs(storage: StorageLike | null | undefined): { wallOpacity: WallOpacity; showFloor: boolean; style: StyleId } {
+  const out = { wallOpacity: { ...DEFAULT_WALL_OPACITY }, showFloor: true, style: "modern" as StyleId };
   try {
-    const v = JSON.parse(storage?.getItem(PREFS_KEY) ?? "null") as { wallOpacity?: Partial<WallOpacity>; showFloor?: unknown } | null;
+    const v = JSON.parse(storage?.getItem(PREFS_KEY) ?? "null") as { wallOpacity?: Partial<WallOpacity>; showFloor?: unknown; style?: unknown } | null;
     if (v) {
+      if (STYLES.some((s) => s.id === v.style)) out.style = v.style as StyleId;
       out.wallOpacity.home = clamp01(v.wallOpacity?.home, out.wallOpacity.home);
       out.wallOpacity.site = clamp01(v.wallOpacity?.site, out.wallOpacity.site);
       if (typeof v.showFloor === "boolean") out.showFloor = v.showFloor;
@@ -95,6 +97,8 @@ export type AppState = {
   cutaway: CutawaySpec | null;
   /** Measuring tape: pinch two points. */
   measuring: boolean;
+  /** Interior look: colours, fabrics and dressing pieces. */
+  style: StyleId;
   /** A plan of the owner's own is loaded, not the demo house. */
   custom: boolean;
   /** Before/after: the scene shows the plan as it came, not the owner's version. */
@@ -146,6 +150,7 @@ export class Store {
       touring: false,
       comparing: false,
       custom: false,
+      style: prefs.style,
       site: { phase: "off", showFloor: prefs.showFloor, here: "", heading: 0, fine: false, hold: "session", north: "unset" },
       wallOpacity: prefs.wallOpacity,
       xrayRestore: null,
@@ -227,7 +232,7 @@ export class Store {
       const w = { ...this.s.wallOpacity };
       // While X-ray is on, remember the opacity it will go back to.
       if (this.s.xray && this.s.xrayRestore !== null) w[this.opacityKey] = this.s.xrayRestore;
-      this.storage?.setItem(PREFS_KEY, JSON.stringify({ wallOpacity: w, showFloor: this.s.site.showFloor }));
+      this.storage?.setItem(PREFS_KEY, JSON.stringify({ wallOpacity: w, showFloor: this.s.site.showFloor, style: this.s.style }));
     } catch {
       /* storage can be unavailable; the session still works */
     }
@@ -237,6 +242,14 @@ export class Store {
   setSelectQuiet() {
     this.s.selected = null;
     this.s.view = "main";
+  }
+
+  /** Switches the interior look; the scene is rebuilt with the new colours and dressing. */
+  setStyle(id: StyleId) {
+    this.s.style = styleById(id).id;
+    this.s.message = `Style: ${styleById(id).label}.`;
+    this.persistPrefs();
+    this.emit(true);
   }
 
   /** Replaces the house with another plan (or the demo house again) and starts afresh. */

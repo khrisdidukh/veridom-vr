@@ -1,11 +1,12 @@
 import type { Store } from "../state";
 import { C, roundRect } from "./panel";
+import { nextStyle, styleById } from "../style/styles";
 
 // The compact panel in the palm of the left hand: modes, the wall slider,
 // undo and before/after. Same press / drag / release contract as the big panel.
 
 const W = 640;
-const H = 400;
+const H = 490;
 
 type Btn = { x: number; y: number; w: number; h: number; label: string; active?: boolean; disabled?: boolean; onPress: () => void };
 
@@ -111,6 +112,8 @@ export class WristPanel {
     this.btn({ x: 40, y: 292, w: bw, h: 78, label: "Undo", disabled: s.changes.length === 0 || s.comparing, onPress: () => store.undo() });
     this.btn({ x: 50 + bw, y: 292, w: bw, h: 78, label: "Original", active: s.comparing, onPress: () => store.setCompare(!s.comparing) });
     this.btn({ x: 60 + bw * 2, y: 292, w: bw, h: 78, label: "X-ray", active: s.xray, onPress: () => store.setXray(!s.xray) });
+    // Interior look: one press goes to the next.
+    this.btn({ x: 40, y: 384, w: W - 80, h: 78, label: `Style: ${styleById(s.style).label}  ▸`, onPress: () => store.setStyle(nextStyle(s.style)) });
     this.onRedraw();
   }
 }

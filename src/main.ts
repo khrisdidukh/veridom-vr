@@ -29,6 +29,9 @@ import { formatLength } from "./info/measure";
 import { roomDaylightNote } from "./info/daylight";
 import { FRANZEN, MONTHS } from "./env/sun";
 import { importPlan } from "./plan/import";
+import { dressing, nextStyle, styleById } from "./style/styles";
+import { buildDressing, disposeDressing } from "./style/build";
+import { applyLook } from "./house/materials";
 import { blockers, stepFor, walk, type Blocker } from "./walk/collide";
 import { ifcToPlan } from "./plan/ifc";
 import { DEMO_HOUSE } from "./house/demo";
@@ -145,7 +148,27 @@ inner.add(lampGroup);
 const glowMat = new THREE.MeshBasicMaterial({ color: 0xfff1d6 });
 const snowMat = solid(0xf3f6f9, 0.85);
 
+// Interior look: the shared materials are recoloured, then everything is built again from them.
+let styleApplied = "";
+let dressGroup: THREE.Group | null = null;
+function restyle() {
+  const look = styleById(store.s.style);
+  if (styleApplied !== look.id) {
+    styleApplied = look.id;
+    applyLook(look.colors, look.stoneRoughness);
+    // Furniture is rebuilt, so that it takes the new fabrics and woods.
+    for (const p of placed.values()) furnitureGroup.remove(p.group);
+    placed.clear();
+  }
+  if (dressGroup) disposeDressing(dressGroup);
+  // Dressing pieces are extra triangles and textures: not in lite mode.
+  dressGroup = LITE ? null : buildDressing(dressing(store.s.house, look.id), look);
+  if (dressGroup) inner.add(dressGroup);
+  document.getElementById("btn-style")!.textContent = `Style: ${look.label}`;
+}
+
 function rebuild() {
+  restyle();
   if (built) inner.remove(built.root);
   built = buildHouse(store.s.house);
   inner.add(built.root);
@@ -301,6 +324,7 @@ function applyState() {
 
   syncFurniture();
   furnitureGroup.visible = prog(5) > 0.6;
+  if (dressGroup) dressGroup.visible = furnitureGroup.visible;
 
   // Highlights: plan problems in orange, the selected element in cyan.
   const meshesFor = (id: string) => built!.byElement.get(id) ?? placed.get(id)?.meshes() ?? [];
@@ -1491,6 +1515,7 @@ document.body.classList.toggle("touch", TOUCH);
 document.getElementById("btn-look")!.addEventListener("click", () => void toggleMouseLook());
 document.getElementById("btn-walk")!.addEventListener("click", () => store.setMode("walk"));
 document.getElementById("btn-doll")!.addEventListener("click", () => dollhouse());
+document.getElementById("btn-style")!.addEventListener("click", () => store.setStyle(nextStyle(store.s.style)));
 document.getElementById("btn-panel")!.addEventListener("click", () => document.body.classList.toggle("panel-open"));
 document.addEventListener("pointerlockchange", () => document.body.classList.toggle("locked", document.pointerLockElement === renderer.domElement));
 {

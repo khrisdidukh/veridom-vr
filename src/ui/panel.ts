@@ -8,6 +8,7 @@ import { ASSEMBLIES, ASSEMBLY_IDS, insulationShare, thickness, type AssemblyId }
 import { APPROX_NOTE, assemblySummary, noteFor } from "../info/notes";
 import { MONTH_NAMES, sunHours } from "../info/daylight";
 import { FRANZEN, type Place } from "../env/sun";
+import { nextStyle, styleById } from "../style/styles";
 
 // One control panel drawn on a canvas. In the headset it is a texture on a
 // floating plane; on a desktop the same canvas sits in the page. Hits arrive
@@ -394,11 +395,12 @@ export class Panel {
       this.btn({ x, y, w, h: 60, label, active, size: 26, onPress });
       x += w + 10;
     };
-    add("Layers", 105, s.view === "layers", () => store.set({ view: s.view === "layers" ? "main" : "layers", selected: null }));
-    add("Daylight", 125, s.view === "daylight", () => store.set({ view: s.view === "daylight" ? "main" : "daylight", selected: null }));
-    add("Measure", 120, s.measuring, () => store.set({ measuring: !s.measuring, message: s.measuring ? "" : "Measuring tape: pinch a first point, then a second." }));
-    if (s.mode !== "site" && !s.custom) add(s.touring ? "Stop" : "▶ Tour", 105, s.touring, () => this.hooks.tour());
-    if (s.mode === "site") add("Floor", 100, s.site.showFloor, () => store.setSite({ showFloor: !s.site.showFloor }));
+    add("Layers", 100, s.view === "layers", () => store.set({ view: s.view === "layers" ? "main" : "layers", selected: null }));
+    add("Daylight", 120, s.view === "daylight", () => store.set({ view: s.view === "daylight" ? "main" : "daylight", selected: null }));
+    add("Measure", 115, s.measuring, () => store.set({ measuring: !s.measuring, message: s.measuring ? "" : "Measuring tape: pinch a first point, then a second." }));
+    if (s.mode !== "site" && !s.custom) add(s.touring ? "Stop" : "▶ Tour", 100, s.touring, () => this.hooks.tour());
+    add(styleById(s.style).short, 105, false, () => store.setStyle(nextStyle(s.style)));
+    if (s.mode === "site") add("Floor", 90, s.site.showFloor, () => store.setSite({ showFloor: !s.site.showFloor }));
   }
 
   /** Hours of direct sun per room, month by month, as a heat map. */

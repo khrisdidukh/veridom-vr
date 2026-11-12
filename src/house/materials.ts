@@ -70,6 +70,9 @@ export const M = {
     return once("glass", () => new THREE.MeshStandardMaterial({ color: 0xeaf3f6, roughness: 0.04, metalness: 1, transparent: true, opacity: 0.24, envMapIntensity: 1, depthWrite: false, userData: { glass: true } }));
   },
   get stone() { return once("stone", () => solid(0x3a3b3d, 0.35, 0.05)); },
+  get front() { return once("front", () => solid(0xe8e4dc, 0.55)); },
+  get duvet() { return once("duvet", () => solid(0xc9ced3, 0.95)); },
+  get accent() { return once("accent", () => solid(0x33566b, 0.9)); },
   get fabricGrey() { return once("fabricGrey", () => solid(0x9b968e, 0.95)); },
   get fabricSand() { return once("fabricSand", () => solid(0xcbbfae, 0.95)); },
   get linen() { return once("linen", () => solid(0xf0ede6, 0.9)); },
@@ -119,6 +122,17 @@ function paintedPlaster(): THREE.Texture {
   t.colorSpace = THREE.SRGBColorSpace;
   t.anisotropy = 4;
   return t;
+}
+
+/** Recolours the shared materials for an interior look. Pieces built afterwards take the new colours. */
+export function applyLook(colors: Record<string, number | [number, number, number]>, stoneRoughness: number) {
+  for (const [key, tint] of Object.entries(colors)) {
+    const m = (M as unknown as Record<string, THREE.MeshStandardMaterial>)[key];
+    if (!m) continue;
+    if (typeof tint === "number") m.color.set(tint);
+    else m.color.setRGB(tint[0], tint[1], tint[2]);
+  }
+  M.stone.roughness = stoneRoughness;
 }
 
 const made = new Map<string, THREE.Material>();
