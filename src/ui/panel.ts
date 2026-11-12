@@ -95,7 +95,7 @@ export class Panel {
   onRedraw: () => void = () => {};
   onExport: (text: string) => void = () => {};
 
-  constructor(private store: Store, private hooks: { enterRoom: (id: string) => void; turn: (deg: number) => void; rotateModel: (deg: number) => void; addFurniture: (catalogId: string) => void; site: SiteHooks; tour: () => void; layers: { open: (a: AssemblyId) => void } }) {
+  constructor(private store: Store, private hooks: { enterRoom: (id: string) => void; turn: (deg: number) => void; rotateModel: (deg: number) => void; addFurniture: (catalogId: string) => void; site: SiteHooks; tour: () => void; dollhouse: () => void; layers: { open: (a: AssemblyId) => void } }) {
     this.canvas = document.createElement("canvas");
     this.canvas.width = W;
     this.canvas.height = H;
@@ -238,15 +238,18 @@ export class Panel {
       ctx.fillText(aligning ? "Walk slowly. Keep your boundary on." : s.site.north === "unset" ? "North is not set yet — pinch Adjust, then “North is where I look”" : `Facing ${compass(s.site.heading)} · ${sun}`, 436, y + 54, W - 476);
     } else if (s.mode === "walk") {
       const rooms = s.house.rooms.slice(0, 6);
-      const bw = (W - 80 - 10 * (rooms.length + 1)) / (rooms.length + 2);
+      const bw = (W - 80 - 10 * (rooms.length + 2)) / (rooms.length + 3);
       rooms.forEach((r, i) => {
         this.btn({ x: 40 + i * (bw + 10), y, w: bw, h: 60, label: r.name.split(" ")[0]!, active: s.roomId === r.id, onPress: () => this.hooks.enterRoom(r.id) });
       });
       this.btn({ x: 40 + rooms.length * (bw + 10), y, w: bw, h: 60, label: "⟲ Turn", onPress: () => this.hooks.turn(45) });
       this.btn({ x: 40 + (rooms.length + 1) * (bw + 10), y, w: bw, h: 60, label: "Turn ⟳", onPress: () => this.hooks.turn(-45) });
+      this.btn({ x: 40 + (rooms.length + 2) * (bw + 10), y, w: bw, h: 60, label: "Top view", size: 26, onPress: () => this.hooks.dollhouse() });
     } else {
-      this.btn({ x: 40, y, w: 260, h: 60, label: "⟲ Rotate", onPress: () => this.hooks.rotateModel(45) });
-      this.btn({ x: 312, y, w: 260, h: 60, label: "Rotate ⟳", onPress: () => this.hooks.rotateModel(-45) });
+      this.btn({ x: 40, y, w: 170, h: 60, label: "⟲ Rotate", onPress: () => this.hooks.rotateModel(45) });
+      this.btn({ x: 220, y, w: 170, h: 60, label: "Rotate ⟳", onPress: () => this.hooks.rotateModel(-45) });
+      this.btn({ x: 400, y, w: 180, h: 60, label: "Dollhouse", onPress: () => this.hooks.dollhouse() });
+      this.navExtras(600, y);
       ctx.fillStyle = C.dim;
       ctx.font = "24px system-ui, sans-serif";
       ctx.textAlign = "left";
@@ -375,6 +378,11 @@ export class Panel {
     ctx.fillStyle = C.dim;
     wrap(ctx, c.impact.summary, 70, y + 252, W - 160, 34);
     if (c.impact.rework.length) wrap(ctx, "Rework: " + c.impact.rework.join(" · "), 70, y + 292, W - 160, 34);
+  }
+
+  /** Further buttons in the model row (level switch, plan check); filled in by later features. Returns the next free x. */
+  private navExtras(x: number, _y: number): number {
+    return x;
   }
 
   /** Buttons to the right of the wall slider. */

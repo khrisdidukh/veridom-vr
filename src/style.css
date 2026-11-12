@@ -32,7 +32,7 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #b9d3e6; }
   .intro p:not(.note) { display: none; }
 }
 .caption {
-  display: none; position: fixed; top: 18px; left: 464px; right: 16px; margin: 0 auto; width: fit-content;
+  display: none; position: fixed; top: 64px; left: 464px; right: 16px; margin: 0 auto; width: fit-content;
   max-width: 760px; padding: 12px 18px; border-radius: 12px;
   background: rgba(15, 18, 23, 0.9); color: #fff; font: 600 20px system-ui, sans-serif; text-align: center;
   border-left: 5px solid #29c4d6; pointer-events: none;
@@ -44,3 +44,26 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #b9d3e6; }
 .plan-note strong { display: block; color: #eef1f4; margin-bottom: 2px; }
 .plan-note.bad { background: #3a2220; }
 .plan-note.bad strong { color: #ffb0a8; }
+#app canvas { touch-action: none; }
+.quick { position: fixed; top: 16px; right: 16px; display: flex; gap: 8px; }
+.quick button, .walk-bar button { font: 600 14px system-ui, sans-serif; padding: 9px 13px; border-radius: 10px; border: 0; background: rgba(19, 22, 27, 0.88); color: #eef1f4; cursor: pointer; }
+.quick button:hover, .walk-bar button:hover { background: #20434a; }
+.walk-bar { display: none; position: fixed; right: 16px; bottom: 16px; max-width: calc(100vw - 580px); padding: 8px 12px; border-radius: 10px; background: rgba(19, 22, 27, 0.82); color: #c7cfd8; font: 13px system-ui, sans-serif; }
+.walk-bar b { color: #fff; }
+.walk-bar button { padding: 5px 9px; font-size: 13px; background: #20434a; }
+body.walking .walk-bar { display: block; }
+.lock-hint, .crosshair { display: none; }
+body.locked .lock-hint { display: inline; }
+body.locked .crosshair { display: block; position: fixed; left: 50%; top: 50%; width: 8px; height: 8px; margin: -4px; border-radius: 50%; background: #fff; box-shadow: 0 0 0 2px rgba(0, 0, 0, .5); pointer-events: none; }
+.stick { display: none; position: fixed; left: 22px; bottom: 22px; width: 116px; height: 116px; border-radius: 50%; background: rgba(19, 22, 27, 0.55); border: 2px solid rgba(255, 255, 255, .35); touch-action: none; }
+.stick i { position: absolute; left: 50%; top: 50%; width: 46px; height: 46px; margin: -23px; border-radius: 50%; background: #29c4d6; }
+.only-touch { display: none; }
+body.touch .only-touch { display: inline-block; }
+body.touch .no-touch { display: none; }
+body.touch.walking .stick { display: block; }
+body.touch.walking .panel { display: none; }
+body.touch.walking.panel-open .panel { display: block; bottom: 150px; }
+body.touch .walk-bar { left: 150px; right: 12px; bottom: 12px; max-width: none; font-size: 12px; }
+body.in-xr .quick, body.in-xr .walk-bar, body.in-xr .stick { display: none !important; }
+@media (max-width: 1100px) { .walk-bar { max-width: calc(100vw - 32px); bottom: auto; top: 64px; } body.touch .walk-bar { top: auto; } }
+body.touch.walking .intro { display: none; }

@@ -15,6 +15,14 @@
       <p class="plan"><label for="plan-file">Open your own plan</label> (JSON or IFC) · <a href="#" id="plan-demo">demo house</a> · <a href="plans/sample-house.json" download>sample file</a><input id="plan-file" type="file" accept=".json,.ifc,application/json" hidden /></p>
       <div id="plan-note" class="plan-note" style="display:none"></div>
     </header>
+    <nav id="quick" class="quick">
+      <button id="btn-walk" title="Walk through the rooms">Walk</button>
+      <button id="btn-doll" title="The whole home from above">Dollhouse</button>
+      <button id="btn-panel" class="only-touch" title="Show or hide the panel">☰ Panel</button>
+    </nav>
+    <div id="walk-bar" class="walk-bar"><span class="no-touch"><b>W A S D</b> or arrows to walk · drag to look · click a door or wall to change it · </span><span class="only-touch">Left thumb walks · drag to look · tap to select</span><button id="btn-look" class="no-touch">Mouse look (M)</button><span class="lock-hint"> · <b>Esc</b> frees the mouse</span></div>
+    <div id="stick" class="stick"><i></i></div>
+    <div id="crosshair" class="crosshair"></div>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

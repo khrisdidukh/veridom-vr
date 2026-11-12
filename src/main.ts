@@ -29,6 +29,7 @@ import { formatLength } from "./info/measure";
 import { roomDaylightNote } from "./info/daylight";
 import { FRANZEN, MONTHS } from "./env/sun";
 import { importPlan } from "./plan/import";
+import { blockers, stepFor, walk, type Blocker } from "./walk/collide";
 import { ifcToPlan } from "./plan/ifc";
 import { DEMO_HOUSE } from "./house/demo";
 import { SiteXR } from "./site/xr";
@@ -319,6 +320,7 @@ function applyState() {
   placeMarkers();
   syncCutaway();
   syncDots();
+  syncWalkBar();
   syncNote();
   syncRoomNotes();
   syncMeasure();
@@ -390,13 +392,13 @@ function placeWorld() {
   if (!xr) {
     if (s.mode !== "model") {
       if (!desktopWalkSet) {
-        camera.position.set(0, 1.6, 0);
-        controls.target.set(0, 1.55, -0.1);
+        look(0, -0.1);
         desktopWalkSet = true;
       }
     } else if (desktopWalkSet) {
       camera.position.set(-7, 10, 13);
       controls.target.set(0, 0, 0);
+      controls.enabled = true;
       desktopWalkSet = false;
     }
   }
@@ -1028,8 +1030,7 @@ function standAt(x: number, z: number, heading: number) {
   walkTarget = new THREE.Vector2(x, z);
   walkYaw = THREE.MathUtils.degToRad(heading);
   if (!renderer.xr.isPresenting) {
-    camera.position.set(0, 1.6, 0);
-    controls.target.set(0, 1.585, -0.1);
+    look(0, -0.15);
   }
 }
 
@@ -1152,6 +1153,7 @@ const panel = new Panel(store, {
   rotateModel: (deg) => store.set({ modelYaw: (store.s.modelYaw + deg) % 360 }),
   addFurniture: (catalogId) => addFurnitureInView(catalogId),
   tour: () => (tourT < 0 ? startTour() : stopTour()),
+  dollhouse: () => dollhouse(),
   layers: {
     open: (assembly) => {
       if (store.s.cutaway?.assembly === assembly) store.closeCutaway();
@@ -1378,24 +1380,149 @@ renderer.domElement.addEventListener("pointerdown", (e) => {
     controls.enabled = false;
     store.select(hit.sel);
     startDrag(hit.sel.id, ray);
-  }
+  } else if (firstPerson()) lookDrag = { x: e.clientX, y: e.clientY, id: e.pointerId };
 });
 renderer.domElement.addEventListener("pointermove", (e) => {
   if (dragging) dragTo(mouseRay(e));
+  else if (document.pointerLockElement === renderer.domElement) look(fpYaw - e.movementX * 0.0025, fpPitch - e.movementY * 0.0025);
+  else if (lookDrag && lookDrag.id === e.pointerId && firstPerson()) {
+    // Dragging pulls the view along, like turning a globe.
+    look(fpYaw + (e.clientX - lookDrag.x) * 0.004, fpPitch + (e.clientY - lookDrag.y) * 0.004);
+    lookDrag.x = e.clientX;
+    lookDrag.y = e.clientY;
+  }
 });
 renderer.domElement.addEventListener("pointerup", (e) => {
   if (renderer.xr.isPresenting) return;
-  controls.enabled = true;
+  lookDrag = null;
+  controls.enabled = !firstPerson();
   if (dragging) {
     endDrag();
     return;
   }
-  if (downAt.distanceTo(new THREE.Vector2(e.clientX, e.clientY)) > 6) return; // was an orbit drag
-  mouseRay(e);
+  const locked = document.pointerLockElement === renderer.domElement;
+  if (!locked && downAt.distanceTo(new THREE.Vector2(e.clientX, e.clientY)) > 6) return; // was a look or orbit drag
+  // With the mouse locked for looking, a click means "the thing in the middle of the view".
+  if (locked) raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
+  else mouseRay(e);
   const hit = pickHit(raycaster);
   if (hit) activate(hit);
   else if (!store.s.measuring) store.select(null);
 });
+
+// ——— Walking without a headset: keys and mouse on a laptop, a thumb stick and drag on a phone. ———
+let fpYaw = 0;
+let fpPitch = 0;
+let lookDrag: { x: number; y: number; id: number } | null = null;
+const firstPerson = () => !renderer.xr.isPresenting && store.s.mode !== "model";
+/** Points the desktop camera: yaw to the left is positive, pitch up is positive. */
+function look(yaw: number, pitch: number) {
+  fpYaw = yaw;
+  fpPitch = THREE.MathUtils.clamp(pitch, -1.3, 1.3);
+  camera.position.set(0, 1.6, 0);
+  camera.rotation.set(fpPitch, fpYaw, 0, "YXZ");
+  controls.enabled = false;
+}
+const keys = new Set<string>();
+const stick = { x: 0, y: 0 };
+window.addEventListener("keydown", (e) => {
+  if (e.target instanceof HTMLInputElement || e.metaKey || e.ctrlKey) return;
+  const k = e.key.toLowerCase();
+  if (k === "m" && firstPerson()) void toggleMouseLook();
+  if (["w", "a", "s", "d", "arrowup", "arrowdown", "arrowleft", "arrowright", "shift"].includes(k)) {
+    keys.add(k);
+    if (k.startsWith("arrow") && firstPerson()) e.preventDefault();
+  }
+});
+window.addEventListener("keyup", (e) => keys.delete(e.key.toLowerCase()));
+window.addEventListener("blur", () => keys.clear());
+async function toggleMouseLook() {
+  try {
+    if (document.pointerLockElement) document.exitPointerLock();
+    else await renderer.domElement.requestPointerLock();
+  } catch {
+    /* pointer lock refused: dragging still looks around */
+  }
+}
+let wallList: Blocker[] = [];
+let wallListFor: unknown = null;
+/** Moves the walker for this frame. Returns true when they moved. */
+function updateWalk(dt: number): boolean {
+  if (!firstPerson() || tourT >= 0) return false;
+  const right = (keys.has("d") || keys.has("arrowright") ? 1 : 0) - (keys.has("a") || keys.has("arrowleft") ? 1 : 0) + stick.x;
+  const forward = (keys.has("w") || keys.has("arrowup") ? 1 : 0) - (keys.has("s") || keys.has("arrowdown") ? 1 : 0) + stick.y;
+  if (!right && !forward) return false;
+  const h = store.s.house;
+  if (wallListFor !== h) {
+    wallList = blockers(h);
+    wallListFor = h;
+  }
+  // The way the camera looks, in plan axes.
+  const f = new THREE.Vector3(-Math.sin(fpYaw), 0, -Math.cos(fpYaw)).applyQuaternion(pivot.quaternion.clone().invert());
+  const step = stepFor({ x: f.x, z: -f.z }, right, forward, (keys.has("shift") ? 4 : 2.2) * dt);
+  const to = walk(wallList, { x: walkTarget.x, z: walkTarget.y }, { x: walkTarget.x + step.x, z: walkTarget.y + step.z });
+  if (Math.abs(to.x - walkTarget.x) + Math.abs(to.z - walkTarget.y) < 1e-5) return false;
+  walkTarget.set(to.x, to.z);
+  if (store.s.mode === "site") siteAlign = { x: -to.x, y: 0, z: to.z, yaw: 0 };
+  placeWorld();
+  refreshShadows();
+  const room = roomAt(h, to);
+  if (room && room.id !== store.s.roomId) store.set({ roomId: room.id });
+  return true;
+}
+
+/** The whole home from above, roof off. */
+function dollhouse() {
+  if (document.pointerLockElement) document.exitPointerLock();
+  store.setTimeline(5);
+  store.setMode("model", { view: "main", selected: null });
+  if (renderer.xr.isPresenting) return;
+  const f = extent();
+  const size = Math.hypot(f.max.x - f.min.x, f.max.z - f.min.z);
+  camera.position.set(0, size * 1.05, size * 0.38);
+  controls.target.set(0, 0, 0);
+}
+
+// Hint bar and touch controls on the page.
+const walkBar = document.getElementById("walk-bar")!;
+const stickEl = document.getElementById("stick")!;
+const TOUCH = window.matchMedia?.("(pointer: coarse)").matches ?? false;
+document.body.classList.toggle("touch", TOUCH);
+document.getElementById("btn-look")!.addEventListener("click", () => void toggleMouseLook());
+document.getElementById("btn-walk")!.addEventListener("click", () => store.setMode("walk"));
+document.getElementById("btn-doll")!.addEventListener("click", () => dollhouse());
+document.getElementById("btn-panel")!.addEventListener("click", () => document.body.classList.toggle("panel-open"));
+document.addEventListener("pointerlockchange", () => document.body.classList.toggle("locked", document.pointerLockElement === renderer.domElement));
+{
+  let id = -1;
+  const move = (e: PointerEvent) => {
+    const r = stickEl.getBoundingClientRect();
+    const x = (e.clientX - r.left - r.width / 2) / (r.width / 2), y = (e.clientY - r.top - r.height / 2) / (r.height / 2);
+    const l = Math.max(1, Math.hypot(x, y));
+    stick.x = x / l;
+    stick.y = -y / l;
+    (stickEl.firstElementChild as HTMLElement).style.transform = `translate(${stick.x * 30}px, ${-stick.y * 30}px)`;
+  };
+  stickEl.addEventListener("pointerdown", (e) => {
+    id = e.pointerId;
+    stickEl.setPointerCapture(id);
+    move(e);
+  });
+  stickEl.addEventListener("pointermove", (e) => e.pointerId === id && move(e));
+  const end = () => {
+    id = -1;
+    stick.x = stick.y = 0;
+    (stickEl.firstElementChild as HTMLElement).style.transform = "";
+  };
+  stickEl.addEventListener("pointerup", end);
+  stickEl.addEventListener("pointercancel", end);
+}
+function syncWalkBar() {
+  const xr = renderer.xr.isPresenting;
+  document.body.classList.toggle("walking", firstPerson());
+  document.body.classList.toggle("in-xr", xr);
+  if (!firstPerson() && document.pointerLockElement) document.exitPointerLock();
+}
 
 // XR: hands (and controllers, if any) give a ray; a pinch is "select".
 const handFactory = new XRHandModelFactory().setPath(HAND_PROFILES);
@@ -1733,7 +1860,8 @@ renderer.setAnimationLoop(() => {
     updateWrist();
     updatePointers();
     updateSiteXR();
-  } else controls.update();
+  } else if (firstPerson()) updateWalk(dt);
+  else controls.update();
   trackSite(performance.now());
   updateTour(dt);
   updateNotes(dt);
@@ -1861,7 +1989,7 @@ async function addEntryButtons() {
   const bar = document.getElementById("enter")!;
   const xr = navigator.xr;
   const note = () => {
-    bar.innerHTML = `<p class="note">Open this page in the Meta Quest browser to step inside. On a computer, drag to look around and click a door, window or socket. <a href="?emulate=1">Try the headset emulator</a>.</p>`;
+    bar.innerHTML = `<p class="note">Open this page in the Meta Quest browser to step inside. No headset? Press Walk and go through the rooms with W A S D and the mouse, or Dollhouse for the view from above. <a href="?emulate=1">Try the headset emulator</a>.</p>`;
   };
   if (!xr) return note();
   // Everything beyond local-floor is optional: on site it adds real-surface hit-tests, anchors and large-area tracking.
@@ -1903,12 +2031,12 @@ void boot();
     walkTarget = new THREE.Vector2(x, z);
     walkYaw = THREE.MathUtils.degToRad(yawDeg);
     store.setMode("walk");
-    camera.position.set(0, 1.6, 0);
-    controls.target.set(0, 1.6 + pitch, -0.1);
+    look(0, Math.atan2(pitch, 0.1));
   },
   /** On-site state for automated checks. */
   site: () => ({ north: store.s.site.north, northOffset: siteAlign && siteNorthYaw !== null ? northOffsetOf(siteAlign, siteNorthYaw) : null, sunDir: env.sun.position.clone().sub(env.sun.target.position).normalize().toArray(), phase: sitePhase(), align: siteAlign, preview: sitePreview, here: store.s.site.here, heading: store.s.site.heading, hold: store.s.site.hold, anchor: siteXR.anchorState, anchorId: siteXR.anchorId, features: { ...siteXR.features }, space: siteXR.spaceType, passthrough }),
-  enterSite, siteGhost, activate, pickHit, wrist, wristMesh, loadPlan, useDemoPlan,
+  enterSite, siteGhost, activate, pickHit, wrist, wristMesh, loadPlan, useDemoPlan, dollhouse, keys, stick,
+  walkAt: () => ({ x: walkTarget.x, z: walkTarget.y, yaw: fpYaw }),
   palm: () => { const j = (leftHand as unknown as { joints?: Record<string, THREE.Group> } | null)?.joints; if (!j?.["wrist"]) return null; const n = palmNormal(j["wrist"]!.position, j["index-finger-metacarpal"]!.position, j["pinky-finger-metacarpal"]!.position, "left"); return { n, shown: wristMesh.visible }; },
   /** Tour controls for automated checks: start it, then step it forward by seconds. */
   tour: { start: startTour, stop: stopTour, advance: (seconds: number) => { for (let t = 0; t < seconds; t += 0.25) updateTour(0.25); return tourStep; } },
