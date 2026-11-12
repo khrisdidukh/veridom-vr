@@ -18,7 +18,8 @@ import { measure } from "./info/measure";
 import { noteFor, type InfoTarget } from "./info/notes";
 import { alongWall, type Wall } from "./house/model";
 import { contactShadow } from "./house/ao";
-import { TOUR, ramp, stepAt, type TourAction } from "./tour";
+import { buildTour, ramp, stepAt, type Caption, type TourAction, type TourStep } from "./tour";
+import { TourMusic } from "./tour-music";
 import { XREstimatedLight } from "three/examples/jsm/webxr/XREstimatedLight.js";
 import { alignCornerAt, alignFromTwoPoints, fitTwoCorners, footprint, headingDeg, loadSite, northOffsetOf, northYawFromHeading, northYawOf, nudge, planToWorld, referenceCorner, rotateAround, roomAt, saveSite, secondCorner, whereAmI, worldToPlan, yawBetween, type Alignment, type WorldPoint } from "./site/align";
 import { Compass } from "./site/compass";
@@ -1031,8 +1032,19 @@ const captionEl = document.createElement("div");
 captionEl.className = "caption";
 document.body.appendChild(captionEl);
 
-function showCaption(text: string) {
-  captionEl.textContent = text;
+function showCaption(c: Caption) {
+  const text = c.title;
+  captionEl.replaceChildren();
+  if (text) {
+    const b = document.createElement("b");
+    b.textContent = c.title;
+    captionEl.append(b);
+    if (c.line) {
+      const l = document.createElement("span");
+      l.textContent = c.line;
+      captionEl.append(l);
+    }
+  }
   captionEl.style.display = text && !renderer.xr.isPresenting ? "block" : "none";
   if (tourCaption) {
     tourCaption.removeFromParent();
@@ -1042,7 +1054,7 @@ function showCaption(text: string) {
   }
   if (!text || !renderer.xr.isPresenting) return;
   // In the headset the caption hangs in front of the wearer, under the line of sight.
-  tourCaption = textPlane({ title: text }, 0.95);
+  tourCaption = textPlane({ title: c.title, lines: c.line ? [c.line] : [] }, 0.95);
   const { head, fwd } = viewerAxes();
   tourCaption.position.copy(head).addScaledVector(fwd, 1.5).add(new THREE.Vector3(0, -0.42, 0));
   tourCaption.lookAt(head);
@@ -1062,26 +1074,33 @@ function tourDo(a: TourAction) {
   if (a.do === "mode") {
     if (a.at) standAt(a.at[0], a.at[1], a.at[2]);
     store.setMode(a.mode, a.room ? { roomId: a.room } : {});
-  } else if (a.do === "timeline" || a.do === "light") tourRamps.push({ start: tourT, a });
-  else if (a.do === "select") store.select({ type: a.type, id: a.id });
-  else if (a.do === "edit") store.edit(a.kind);
-  else if (a.do === "undo") {
-    if (store.s.changes.length) store.undo();
-    store.select(null);
-  } else if (a.do === "cutaway") store.openCutaway(defaultSpec(a.assembly));
-  else if (a.do === "layer") store.setInfo({ kind: "layer", assembly: a.assembly, layer: a.layer });
+  } else if (a.do === "timeline" || a.do === "light" || a.do === "pan") tourRamps.push({ start: tourT, a });
+  else if (a.do === "cutaway") store.openCutaway(defaultSpec(a.assembly));
   else if (a.do === "close") {
     store.closeCutaway();
     store.select(null);
   } else if (a.do === "xray") store.setXray(a.on);
-  else stopTour();
+  else if (a.do === "dollhouse") {
+    dollhouse();
+    // On a screen the view rises out of the house to its place above it.
+    if (!renderer.xr.isPresenting) tourRise = { start: tourT, to: camera.position.clone(), from: new THREE.Vector3(0, 2.2, camera.position.z + camera.position.y * 0.55) };
+  } else stopTour();
 }
+
+let tourSteps: TourStep[] = [];
+let tourRise: { start: number; from: THREE.Vector3; to: THREE.Vector3 } | null = null;
+const music = new TourMusic();
 
 function startTour() {
   tourLight = { ...store.s.light };
+  tourSteps = buildTour(store.s.house, store.s.findings, panel.sunHours());
   tourT = 0;
   tourStep = -1;
   tourRamps = [];
+  tourRise = null;
+  if (document.pointerLockElement) document.exitPointerLock();
+  music.start();
+  document.body.classList.add("touring");
   store.set({ touring: true, measuring: false, view: "main" });
 }
 
@@ -1089,17 +1108,27 @@ function stopTour() {
   if (tourT < 0) return;
   tourT = -1;
   tourRamps = [];
-  showCaption("");
+  tourRise = null;
+  music.stop();
+  document.body.classList.remove("touring");
+  showCaption({ title: "" });
   store.setLight(tourLight);
-  store.set({ touring: false, message: "Tour over. Now try it yourself: pinch a door, a wall, the timeline." });
+  store.set({ touring: false, message: "Tour over. Now try it yourself: walk through, pinch a door or a wall, slide the timeline." });
+}
+
+function setMuted(m: boolean) {
+  music.setMuted(m);
+  document.getElementById("btn-music")!.textContent = m ? "♪ Music off" : "♪ Music on";
+  store.set({ muted: m });
 }
 
 function updateTour(dt: number) {
   if (tourT < 0) return;
   tourT += dt;
-  const i = stepAt(tourT);
+  music.tick();
+  const i = stepAt(tourSteps, tourT);
   while (tourStep < i && tourT >= 0) {
-    const step = TOUR[++tourStep]!;
+    const step = tourSteps[++tourStep]!;
     showCaption(step.caption);
     for (const a of step.actions) if (tourT >= 0) tourDo(a);
   }
@@ -1108,9 +1137,17 @@ function updateTour(dt: number) {
     const v = ramp(r.a.from, r.a.to, r.a.seconds, tourT - r.start);
     if (r.a.do === "timeline") {
       if (Math.abs(store.s.timeline - v) > 0.02 || v === r.a.to) store.setTimeline(v);
+    } else if (r.a.do === "pan") {
+      // A slow look around the room; in the headset the wearer does the looking.
+      if (firstPerson()) look(THREE.MathUtils.degToRad(-v), fpPitch);
     } else if (Math.abs(store.s.light.hour - v) > 0.25 || v === r.a.to) store.setLight({ hour: v });
   }
   tourRamps = tourRamps.filter((r) => tourT - r.start < r.a.seconds);
+  if (tourRise && store.s.mode === "model") {
+    const f = Math.min(1, (tourT - tourRise.start) / 4.5);
+    camera.position.lerpVectors(tourRise.from, tourRise.to, f * f * (3 - 2 * f));
+    if (f >= 1) tourRise = null;
+  }
 }
 
 /** What a pinch or click on `hit` does. Returns false when the hit means nothing here. */
@@ -1177,6 +1214,7 @@ const panel = new Panel(store, {
   rotateModel: (deg) => store.set({ modelYaw: (store.s.modelYaw + deg) % 360 }),
   addFurniture: (catalogId) => addFurnitureInView(catalogId),
   tour: () => (tourT < 0 ? startTour() : stopTour()),
+  mute: () => setMuted(!music.muted),
   dollhouse: () => dollhouse(),
   layers: {
     open: (assembly) => {
@@ -1516,6 +1554,8 @@ document.getElementById("btn-look")!.addEventListener("click", () => void toggle
 document.getElementById("btn-walk")!.addEventListener("click", () => store.setMode("walk"));
 document.getElementById("btn-doll")!.addEventListener("click", () => dollhouse());
 document.getElementById("btn-style")!.addEventListener("click", () => store.setStyle(nextStyle(store.s.style)));
+document.getElementById("btn-tour")!.addEventListener("click", () => (tourT < 0 ? startTour() : stopTour()));
+document.getElementById("btn-music")!.addEventListener("click", () => setMuted(!music.muted));
 document.getElementById("btn-panel")!.addEventListener("click", () => document.body.classList.toggle("panel-open"));
 document.addEventListener("pointerlockchange", () => document.body.classList.toggle("locked", document.pointerLockElement === renderer.domElement));
 {
@@ -2064,5 +2104,5 @@ void boot();
   walkAt: () => ({ x: walkTarget.x, z: walkTarget.y, yaw: fpYaw }),
   palm: () => { const j = (leftHand as unknown as { joints?: Record<string, THREE.Group> } | null)?.joints; if (!j?.["wrist"]) return null; const n = palmNormal(j["wrist"]!.position, j["index-finger-metacarpal"]!.position, j["pinky-finger-metacarpal"]!.position, "left"); return { n, shown: wristMesh.visible }; },
   /** Tour controls for automated checks: start it, then step it forward by seconds. */
-  tour: { start: startTour, stop: stopTour, advance: (seconds: number) => { for (let t = 0; t < seconds; t += 0.25) updateTour(0.25); return tourStep; } },
+  tour: { start: startTour, stop: stopTour, steps: () => tourSteps, music, advance: (seconds: number) => { for (let t = 0; t < seconds; t += 0.25) updateTour(0.25); return tourStep; } },
   store, panel, panelMesh, THREE, renderer, pivot, env, camera, controls, placed, inner, pointers };

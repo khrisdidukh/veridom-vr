@@ -67,3 +67,7 @@ body.touch .walk-bar { left: 150px; right: 12px; bottom: 12px; max-width: none; 
 body.in-xr .quick, body.in-xr .walk-bar, body.in-xr .stick { display: none !important; }
 @media (max-width: 1100px) { .walk-bar { max-width: calc(100vw - 32px); bottom: auto; top: 64px; } body.touch .walk-bar { top: auto; } }
 body.touch.walking .intro { display: none; }
+.caption b { display: block; font-size: 22px; }
+.caption span { display: block; font-weight: 500; font-size: 17px; color: #d5dbe3; margin-top: 2px; }
+.only-tour { display: none; }
+body.touring .only-tour { display: inline-block; }

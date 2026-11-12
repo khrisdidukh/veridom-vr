@@ -105,6 +105,8 @@ export type AppState = {
   comparing: boolean;
   /** The guided tour is driving the app. */
   touring: boolean;
+  /** Tour music is switched off. */
+  muted: boolean;
   light: LightSettings;
   message: string;
   modelYaw: number;
@@ -148,6 +150,7 @@ export class Store {
       cutaway: null,
       measuring: false,
       touring: false,
+      muted: false,
       comparing: false,
       custom: false,
       style: prefs.style,
