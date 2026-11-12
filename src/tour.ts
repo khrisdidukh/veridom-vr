@@ -64,7 +64,7 @@ export function route(h: House, max = 6): { room: Room; via: Vec2 | null }[] {
 }
 
 /** Where the camera stands in a room: just inside the door it came through, clear of furniture, looking into the room. */
-export function standIn(h: House, room: Room, via: Vec2 | null): { x: number; z: number; heading: number } {
+export function standIn(h: House, room: Room, via: Vec2 | null, lookAt?: Vec2): { x: number; z: number; heading: number } {
   const boxes = [...h.furniture.map(itemFootprint), ...h.fixtures.map((f) => ({ min: f.min, max: f.max }))];
   const c = centre(room);
   const m = Math.min(0.6, (room.max.x - room.min.x) / 4, (room.max.z - room.min.z) / 4);
@@ -84,13 +84,15 @@ export function standIn(h: House, room: Room, via: Vec2 | null): { x: number; z:
       }
     }
   }
-  let dx = c.x - best.x, dz = c.z - best.z;
+  // Look at what the caption talks about, when it names a thing; else into the room.
+  const aim = lookAt && Math.hypot(lookAt.x - best.x, lookAt.z - best.z) > 0.5 ? lookAt : c;
+  let dx = aim.x - best.x, dz = aim.z - best.z;
   if (Math.hypot(dx, dz) < 0.3) [dx, dz] = room.max.x - room.min.x >= room.max.z - room.min.z ? [1, 0] : [0, 1];
   return { x: best.x, z: best.z, heading: (Math.atan2(dx, dz) * 180) / Math.PI };
 }
 
 /** One plain, useful thing about a room: a plan problem in it, else its daylight. */
-export function roomPoint(h: House, room: Room, findings: Finding[], hours: number[] | undefined, used: Set<string>): string {
+export function roomPoint(h: House, room: Room, findings: Finding[], hours: number[] | undefined, used: Set<string>): { text: string; spot?: Vec2 } {
   const inRoom = (id: string): boolean => {
     const o = h.openings.find((x) => x.id === id);
     if (o) return doorLinks(h).some((l) => (l.a?.id === room.id || l.b?.id === room.id) && Math.hypot(l.at.x - alongWall(h.walls.find((w) => w.id === o.wallId)!, o.offset + o.width / 2).x, l.at.z - alongWall(h.walls.find((w) => w.id === o.wallId)!, o.offset + o.width / 2).z) < 0.01);
@@ -106,12 +108,18 @@ export function roomPoint(h: House, room: Room, findings: Finding[], hours: numb
   const mine = findings.find((f) => !used.has(f.id) && (things(f).length ? things(f).some(inRoom) : f.elementIds.some(inRoom)));
   if (mine) {
     used.add(mine.id);
-    return `⚠ ${mine.title}`;
+    // Where the problem is: the fixture, switch or piece of furniture it names.
+    const id = things(mine)[0];
+    const fx = h.fixtures.find((x) => x.id === id);
+    const pt = h.points.find((x) => x.id === id);
+    const fu = h.furniture.find((x) => x.id === id);
+    const spot = fx ? { x: (fx.min.x + fx.max.x) / 2, z: (fx.min.z + fx.max.z) / 2 } : pt ? alongWall(h.walls.find((w) => w.id === pt.wallId)!, pt.offset) : fu ? { x: fu.x, z: fu.z } : undefined;
+    return { text: `⚠ ${mine.title}`, spot };
   }
   const jun = hours?.[5] ?? 0, dec = hours?.[11] ?? 0;
   const fmt = (v: number) => (v % 1 ? v.toFixed(1) : String(v));
-  if (jun === 0 && dec === 0) return "No window to the outside: light comes through the doors";
-  return `Direct sun: ${fmt(jun)} h a day in June, ${dec === 0 ? "none" : `${fmt(dec)} h`} in December`;
+  if (jun === 0 && dec === 0) return { text: "No window to the outside: light comes through the doors" };
+  return { text: `Direct sun: ${fmt(jun)} h a day in June, ${dec === 0 ? "none" : `${fmt(dec)} h`} in December` };
 }
 
 /** The whole tour for this house. `at` is seconds from the start; views are plan x, plan z and compass heading. */
@@ -130,8 +138,9 @@ export function buildTour(h: House, findings: Finding[], hours: Record<string, n
   const sunny = [...stops].sort((a, b) => (hours[b.room.id]?.[5] ?? 0) - (hours[a.room.id]?.[5] ?? 0))[0];
   const first = sunny ? standIn(h, sunny.room, sunny.via) : null;
   for (const s of stops) {
-    const v = standIn(h, s.room, s.via);
-    add(6, { title: `${s.room.name} · ${area(s.room).toFixed(1)} m²`, line: roomPoint(h, s.room, findings, hours[s.room.id], used) }, [
+    const point = roomPoint(h, s.room, findings, hours[s.room.id], used);
+    const v = standIn(h, s.room, s.via, point.spot);
+    add(6, { title: `${s.room.name} · ${area(s.room).toFixed(1)} m²`, line: point.text }, [
       { do: "mode", mode: "walk", room: s.room.id, at: [v.x, v.z, v.heading] },
       { do: "pan", from: -18, to: 18, seconds: 6 },
     ]);
